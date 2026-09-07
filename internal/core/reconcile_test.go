@@ -1,0 +1,166 @@
+package core
+
+import (
+	"context"
+	"os/exec"
+	"testing"
+
+	"github.com/rodrigomorales/claudio/internal/engine"
+	"github.com/rodrigomorales/claudio/internal/store"
+)
+
+// dockerAvailable mirrors the skip condition used elsewhere in the repo
+// (internal/repo/repo_test.go) for tests that need a real daemon.
+func dockerAvailable(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping docker-backed test in -short mode")
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker not available")
+	}
+	if err := exec.Command("docker", "info").Run(); err != nil {
+		t.Skip("docker daemon not reachable")
+	}
+}
+
+func openTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	s, err := store.Open(context.Background(), t.TempDir()+"/state.db")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
+func createInstance(t *testing.T, s *store.Store, id string, step store.ProvisionStep) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.CreateInstance(ctx, store.NewInstanceParams{
+		ID: id, RepoURL: "git@github.com:acme/web.git", RepoRoot: "/r", WorktreeDir: "/r/w/" + id,
+		Branch: "main", Image: "claudio/base", RuntimeProfile: "orbstack",
+	}); err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	stepOrder := []store.ProvisionStep{store.StepRepoReady, store.StepPortsReady, store.StepConfigReady, store.StepContainerUp, store.StepHealthy}
+	for _, s2 := range stepOrder {
+		if err := s.TransitionProvisionStep(ctx, id, s2); err != nil {
+			t.Fatalf("advance to %s: %v", s2, err)
+		}
+		if s2 == step {
+			return
+		}
+	}
+}
+
+func TestReconcileFlagsInstanceStillProvisioningAsNeedingResume(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if err := s.CreateInstance(ctx, store.NewInstanceParams{
+		ID: "inst-1", RepoURL: "x", RepoRoot: "x", WorktreeDir: "x", Branch: "x",
+		Image: "x", RuntimeProfile: "x",
+	}); err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	// Left at StepPending — simulates a process that crashed mid-provision.
+
+	dockerAvailable(t) // Reconcile calls engine.ListClaudioContainers, needs a live daemon even with zero containers.
+	actions, err := Reconcile(ctx, s, "")
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(actions) != 1 || actions[0].Kind != ActionResumeProvisioning || actions[0].InstanceID != "inst-1" {
+		t.Fatalf("actions = %+v, want single ResumeProvisioning for inst-1", actions)
+	}
+}
+
+func TestReconcileHealthyInstanceWithNoContainerIsMarkedStopped(t *testing.T) {
+	dockerAvailable(t)
+	s := openTestStore(t)
+	createInstance(t, s, "inst-1", store.StepHealthy)
+	// No real container exists for inst-1 in Docker, so this must surface
+	// as MarkStopped rather than silently doing nothing.
+
+	actions, err := Reconcile(context.Background(), s, "")
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(actions) != 1 || actions[0].Kind != ActionMarkStopped || actions[0].InstanceID != "inst-1" {
+		t.Fatalf("actions = %+v, want single MarkStopped for inst-1", actions)
+	}
+
+	if err := ApplyMarkStopped(context.Background(), s, "inst-1"); err != nil {
+		t.Fatalf("ApplyMarkStopped: %v", err)
+	}
+	inst, err := s.GetInstance(context.Background(), "inst-1")
+	if err != nil {
+		t.Fatalf("GetInstance: %v", err)
+	}
+	if inst.DesiredState != store.StateStopped {
+		t.Errorf("DesiredState = %s, want %s", inst.DesiredState, store.StateStopped)
+	}
+}
+
+func TestReconcileIgnoresDestroyedInstances(t *testing.T) {
+	dockerAvailable(t)
+	s := openTestStore(t)
+	createInstance(t, s, "inst-1", store.StepHealthy)
+	if err := s.TransitionDesiredState(context.Background(), "inst-1", store.StateDestroyed); err != nil {
+		t.Fatalf("transition to destroyed: %v", err)
+	}
+
+	actions, err := Reconcile(context.Background(), s, "")
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(actions) != 0 {
+		t.Fatalf("actions = %+v, want none for a destroyed instance", actions)
+	}
+}
+
+func TestReconcileFlagsUntrackedContainer(t *testing.T) {
+	dockerAvailable(t)
+	s := openTestStore(t)
+
+	name := "claudio-test-untracked-" + t.Name()
+	out, err := exec.Command("docker", "run", "-d", "--rm",
+		"--label", engine.LabelInstanceID+"=ghost-1",
+		"--label", engine.LabelRepo+"=git@github.com:acme/ghost.git",
+		"--label", engine.LabelCreatedAt+"=12345",
+		"--name", name,
+		"alpine", "sleep", "60").CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker run: %v: %s", err, out)
+	}
+	containerID := trimNewline(string(out))
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", containerID).Run() })
+
+	actions, err := Reconcile(context.Background(), s, "")
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var found *ReconcileAction
+	for i := range actions {
+		if actions[i].Kind == ActionFlagUntracked && actions[i].Untracked.ContainerID == containerID {
+			found = &actions[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("actions = %+v, want a FlagUntracked entry for %s", actions, containerID)
+	}
+	if found.Untracked.RepoURL != "git@github.com:acme/ghost.git" {
+		t.Errorf("Untracked.RepoURL = %q, want the ghost repo URL", found.Untracked.RepoURL)
+	}
+	if found.Untracked.CreatedAt != 12345 {
+		t.Errorf("Untracked.CreatedAt = %d, want 12345", found.Untracked.CreatedAt)
+	}
+}
+
+func trimNewline(s string) string {
+	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
+		s = s[:len(s)-1]
+	}
+	return s
+}

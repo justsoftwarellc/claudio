@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/store"
@@ -84,9 +85,21 @@ func ListInstances(ctx context.Context, st InstanceStore, dockerHost string) ([]
 			ContainerID:   c.ContainerID,
 			ContainerName: c.Name,
 			RepoURL:       c.RepoURL,
+			CreatedAt:     parseLabelTimestamp(c.CreatedAt),
 			Running:       c.Running,
 		})
 	}
 
 	return views, untracked, nil
+}
+
+// parseLabelTimestamp parses the claudio.created_at label, which engine
+// stores verbatim as whatever string was written when the label was
+// stamped (a Unix timestamp — see engine.LabelCreatedAt). An unparseable
+// or absent label (a container Claudio didn't label the usual way) yields
+// 0 rather than an error, since this only ever feeds a "created Nd ago"
+// display, not a correctness-sensitive path.
+func parseLabelTimestamp(v string) int64 {
+	n, _ := strconv.ParseInt(v, 10, 64)
+	return n
 }

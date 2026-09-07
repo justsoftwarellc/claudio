@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
@@ -63,6 +64,65 @@ func ListClaudioContainers(ctx context.Context, host string, includeStopped bool
 		out = append(out, cs)
 	}
 	return out, nil
+}
+
+// PublishedPort is one host<->container TCP/UDP binding Docker reports
+// for a running container, read live via inspect — used by `claudio
+// adopt` (ROD-99) to re-reserve an untracked container's ports in the
+// store without trusting anything but Docker's own view of them.
+type PublishedPort struct {
+	ContainerPort int
+	HostPort      int
+	Protocol      string
+}
+
+// InspectPublishedPorts returns every host port binding an untracked
+// container currently has, so adopt can recreate port_mappings rows that
+// match what is actually bound rather than re-running detection (which
+// might disagree with what the orphaned container was actually given).
+func InspectPublishedPorts(ctx context.Context, host, containerID string) ([]PublishedPort, error) {
+	cli, err := newClient(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	defer cli.Close()
+
+	inspect, err := cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return nil, fmt.Errorf("engine: inspect %s: %w", containerID, err)
+	}
+
+	var out []PublishedPort
+	for portProto, bindings := range inspect.NetworkSettings.Ports {
+		for _, b := range bindings {
+			hostPort, err := strconv.Atoi(b.HostPort)
+			if err != nil {
+				continue
+			}
+			out = append(out, PublishedPort{
+				ContainerPort: portProto.Int(),
+				HostPort:      hostPort,
+				Protocol:      portProto.Proto(),
+			})
+		}
+	}
+	return out, nil
+}
+
+// RemoveContainer force-removes a container by ID — the mechanism behind
+// `claudio forget <container>` (ROD-99): an untracked container the user
+// has decided is not worth reconstructing a row for.
+func RemoveContainer(ctx context.Context, host, containerID string) error {
+	cli, err := newClient(ctx, host)
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+
+	if err := cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
+		return fmt.Errorf("engine: remove container %s: %w", containerID, err)
+	}
+	return nil
 }
 
 // InspectOOMKilled reports whether a container's last exit was an OOM
