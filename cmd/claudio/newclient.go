@@ -26,6 +26,19 @@ func newClient(ctx context.Context) (client.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// config.Defaults() hardcodes workspace_root to "~/.claudio" — correct
+	// when CLAUDIO_HOME is unset, but CLAUDIO_HOME governs claudioDir
+	// (state.db, config.yml) directly without this package's default ever
+	// seeing it. Without this, a test or a second isolated Claudio state
+	// (CLAUDIO_HOME's whole purpose, per claudioStateDir's doc) would
+	// still clone repos under the real ~/.claudio/repos — verified
+	// empirically: an early version of this command's integration test
+	// leaked a real directory into the operator's actual ~/.claudio.
+	// Only applies when config.yml doesn't itself set workspace_root;
+	// that explicit setting must still win.
+	if os.Getenv("CLAUDIO_HOME") != "" && global.WorkspaceRoot == config.Defaults().WorkspaceRoot {
+		global.WorkspaceRoot = claudioDir
+	}
 
 	if err := os.MkdirAll(claudioDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create %s: %w", claudioDir, err)

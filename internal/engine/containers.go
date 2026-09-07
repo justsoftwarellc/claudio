@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
@@ -110,8 +111,14 @@ func InspectPublishedPorts(ctx context.Context, host, containerID string) ([]Pub
 }
 
 // RemoveContainer force-removes a container by ID — the mechanism behind
-// `claudio forget <container>` (ROD-99): an untracked container the user
-// has decided is not worth reconstructing a row for.
+// `claudio forget <container>` (ROD-99) and `claudio destroy` (ROD-100).
+// A container that is already gone (removed out of band, e.g. by hand
+// with `docker rm`) is treated as success rather than an error: both
+// callers only care that no container with this ID exists afterward,
+// which is already true. Without this, `destroy` could never be retried
+// after a container disappeared between two failed attempts — verified
+// empirically, Docker's remove API 404s rather than no-op'ing on an
+// unknown ID.
 func RemoveContainer(ctx context.Context, host, containerID string) error {
 	cli, err := newClient(ctx, host)
 	if err != nil {
@@ -120,6 +127,9 @@ func RemoveContainer(ctx context.Context, host, containerID string) error {
 	defer cli.Close()
 
 	if err := cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("engine: remove container %s: %w", containerID, err)
 	}
 	return nil

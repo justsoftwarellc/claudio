@@ -30,7 +30,7 @@ func cmdLs(ctx context.Context, args []string) int {
 	}
 
 	if len(instances) == 0 && len(untracked) == 0 {
-		fmt.Println("No instances. Create one with `claudio create <repo>` (not yet implemented — see docs/architecture.md).")
+		fmt.Println("No instances. Create one with `claudio create <repo>`.")
 		return 0
 	}
 
@@ -46,7 +46,7 @@ func cmdLs(ctx context.Context, args []string) int {
 
 	if len(untracked) > 0 {
 		fmt.Printf("\nUNTRACKED (%d) — carries Claudio labels but no matching instance record.\n", len(untracked))
-		fmt.Println("Run `claudio adopt <container>` or `claudio forget <container>` (not yet implemented — see ROD-99).")
+		fmt.Println("Run `claudio adopt <container>` or `claudio forget <container>`.")
 		tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 		fmt.Fprintln(tw, "CONTAINER\tNAME\tREPO\tRUNNING")
 		for _, u := range untracked {

@@ -11,6 +11,7 @@ import (
 	"context"
 
 	"github.com/rodrigomorales/claudio/internal/core"
+	"github.com/rodrigomorales/claudio/internal/store"
 )
 
 // Client is deliberately small right now — only what phase 1's commands
@@ -26,6 +27,34 @@ type Client interface {
 	// RuntimeInfo reports the detected Docker-API-compatible runtime —
 	// see docs/architecture.md §12.1.
 	RuntimeInfo(ctx context.Context) (core.RuntimeView, error)
+
+	// Create provisions a new instance end to end: repo root + worktree,
+	// port detection/allocation, container creation (ROD-97/98/99/114).
+	Create(ctx context.Context, params core.CreateParams) (core.CreateResult, error)
+
+	// GetInstance resolves an ID, alias, or unambiguous ID prefix to the
+	// full instance row — used by attach/destroy/cd, all of which accept
+	// the same identifier forms (docs/architecture.md §9).
+	GetInstance(ctx context.Context, idOrName string) (store.Instance, error)
+
+	// Destroy tears down one instance: container, worktree (unless
+	// keepWorkspace), and the store row (ROD-100).
+	Destroy(ctx context.Context, params core.DestroyParams) error
+
+	// Adopt reconstructs a store row for an untracked container from its
+	// Docker labels (ROD-99).
+	Adopt(ctx context.Context, containerID string, createdAt int64) (instanceID string, err error)
+
+	// Forget permanently removes an untracked container without adopting
+	// it (ROD-99).
+	Forget(ctx context.Context, containerID string) error
+
+	// DockerHost is the resolved runtime.docker_host used for this
+	// client's Docker calls — attach needs it directly since it execs
+	// into `docker`/the SDK itself rather than going through Client
+	// (docs/architecture.md's ROD-100 "attach bypasses every abstraction"
+	// exception).
+	DockerHost() string
 
 	Close() error
 }
