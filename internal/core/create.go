@@ -112,68 +112,9 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
 	}
 
-	if err := st.TransitionProvisionStep(ctx, id, store.StepRepoReady); err != nil {
-		return CreateResult{}, failAndReturn(ctx, st, id, err)
-	}
-
-	ports, err := allocatePorts(ctx, st, id, worktreeDir, params)
+	containerID, ports, err := provisionContainer(ctx, st, id, root.Path, worktreeDir, createdAt, params, cmd)
 	if err != nil {
-		return CreateResult{}, failAndReturn(ctx, st, id, err)
-	}
-	if err := st.TransitionProvisionStep(ctx, id, store.StepPortsReady); err != nil {
-		return CreateResult{}, failAndReturn(ctx, st, id, err)
-	}
-
-	// StepConfigReady: phase 1 has no resolved.yml materialization step of
-	// its own yet (that's the artifact docs/architecture.md §12.3
-	// describes for `claudio status`/debugging) — resolution already
-	// happened above, in memory, to build CreateParams. Advancing past
-	// this step here keeps the state machine's shape intact for when that
-	// artifact is added, without inventing a no-op file today.
-	if err := st.TransitionProvisionStep(ctx, id, store.StepConfigReady); err != nil {
-		return CreateResult{}, failAndReturn(ctx, st, id, err)
-	}
-
-	// sibling of the worktree, not inside it — never checked in, never
-	// touched by git. Created here, not by Docker: unlike a named volume,
-	// a bind mount's source directory must already exist on the host —
-	// verified empirically, Docker returns "bind source path does not
-	// exist" rather than creating it — and this is the one place in the
-	// create flow that first needs it to.
-	homeDir := worktreeDir + ".home"
-	if err := os.MkdirAll(homeDir, 0o755); err != nil {
-		return CreateResult{}, failAndReturn(ctx, st, id, fmt.Errorf("create home dir: %w", err))
-	}
-
-	containerID, err := engine.CreateAndStart(ctx, params.DockerHost, engine.CreateSpec{
-		InstanceID:  id,
-		RepoURL:     params.RepoURL,
-		CreatedAt:   createdAt,
-		Image:       params.Image,
-		Cmd:         cmd,
-		RepoRoot:    root.Path,
-		WorktreeDir: worktreeDir,
-		HomeDir:     homeDir,
-		Ports:       toBindings(ports),
-		Resources:   params.Resources,
-		Env:         params.Env,
-	})
-	if err != nil {
-		return CreateResult{}, failAndReturn(ctx, st, id, err)
-	}
-	if err := st.SetContainerID(ctx, id, containerID); err != nil {
-		return CreateResult{}, failAndReturn(ctx, st, id, err)
-	}
-	if err := st.TransitionProvisionStep(ctx, id, store.StepContainerUp); err != nil {
-		return CreateResult{}, failAndReturn(ctx, st, id, err)
-	}
-
-	// StepHealthy: phase 1 has no health probe yet (that needs the
-	// container to expose something to probe, e.g. an HTTP endpoint or a
-	// tmux-session check) — a started container is treated as healthy
-	// immediately. A real probe is future work, not this issue's scope.
-	if err := st.TransitionProvisionStep(ctx, id, store.StepHealthy); err != nil {
-		return CreateResult{}, failAndReturn(ctx, st, id, err)
+		return CreateResult{}, err // provisionContainer already marks StepFailed
 	}
 
 	mappings := make([]store.PortMapping, 0, len(ports))
@@ -195,6 +136,80 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		ContainerID: containerID,
 		Ports:       mappings,
 	}, nil
+}
+
+// provisionContainer runs the port-detection-through-container-creation
+// half of the provisioning state machine for instance id, which already
+// has a store row in StepPending (either just created by CreateInstance,
+// or an existing STOPPED instance being brought back up by StartInstance
+// — see start.go). Shared so `create` and `start` cannot drift on what
+// "provisioning a container" actually does.
+func provisionContainer(ctx context.Context, st CreateStore, id, repoRoot, worktreeDir string, createdAt int64, params CreateParams, cmd []string) (containerID string, ports []resolvedPort, err error) {
+	if err := st.TransitionProvisionStep(ctx, id, store.StepRepoReady); err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+
+	ports, err = allocatePorts(ctx, st, id, worktreeDir, params)
+	if err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+	if err := st.TransitionProvisionStep(ctx, id, store.StepPortsReady); err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+
+	// StepConfigReady: phase 1 has no resolved.yml materialization step of
+	// its own yet (that's the artifact docs/architecture.md §12.3
+	// describes for `claudio status`/debugging) — resolution already
+	// happened above, in memory, to build CreateParams. Advancing past
+	// this step here keeps the state machine's shape intact for when that
+	// artifact is added, without inventing a no-op file today.
+	if err := st.TransitionProvisionStep(ctx, id, store.StepConfigReady); err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+
+	// sibling of the worktree, not inside it — never checked in, never
+	// touched by git. Created here, not by Docker: unlike a named volume,
+	// a bind mount's source directory must already exist on the host —
+	// verified empirically, Docker returns "bind source path does not
+	// exist" rather than creating it — and this is the one place in the
+	// create flow that first needs it to.
+	homeDir := worktreeDir + ".home"
+	if err := os.MkdirAll(homeDir, 0o755); err != nil {
+		return "", nil, failAndReturn(ctx, st, id, fmt.Errorf("create home dir: %w", err))
+	}
+
+	containerID, err = engine.CreateAndStart(ctx, params.DockerHost, engine.CreateSpec{
+		InstanceID:  id,
+		RepoURL:     params.RepoURL,
+		CreatedAt:   createdAt,
+		Image:       params.Image,
+		Cmd:         cmd,
+		RepoRoot:    repoRoot,
+		WorktreeDir: worktreeDir,
+		HomeDir:     homeDir,
+		Ports:       toBindings(ports),
+		Resources:   params.Resources,
+		Env:         params.Env,
+	})
+	if err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+	if err := st.SetContainerID(ctx, id, containerID); err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+	if err := st.TransitionProvisionStep(ctx, id, store.StepContainerUp); err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+
+	// StepHealthy: phase 1 has no health probe yet (that needs the
+	// container to expose something to probe, e.g. an HTTP endpoint or a
+	// tmux-session check) — a started container is treated as healthy
+	// immediately. A real probe is future work, not this issue's scope.
+	if err := st.TransitionProvisionStep(ctx, id, store.StepHealthy); err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+
+	return containerID, ports, nil
 }
 
 // resolvedPort is portdetect.Resolved plus the host port AllocatePort

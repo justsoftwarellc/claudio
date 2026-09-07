@@ -13,14 +13,7 @@ import (
 
 // cmdCreate implements `claudio create <repo> [--branch B | --new-branch
 // B] [--name N] [--ports c:h,...]`. See docs/architecture.md §5.1/§9 and
-// ROD-100.
-//
-// The credential (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, §8.1) is
-// read from this process's own environment and passed through — never
-// logged, never written anywhere but the container's env. ROD-108's
-// credential broker will replace this direct passthrough with something
-// that also handles rotation; until then, the operator's shell is the
-// credential's only source.
+// ROD-100. The credential comes from credentialEnv (see env.go).
 func cmdCreate(ctx context.Context, args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo> [--branch B | --new-branch B] [--name N] [--ports container:host,...]")
@@ -76,16 +69,8 @@ func cmdCreate(ctx context.Context, args []string) int {
 		return 1
 	}
 
-	env := map[string]string{}
-	if v := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"); v != "" {
-		env["CLAUDE_CODE_OAUTH_TOKEN"] = v
-	}
-	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
-		env["ANTHROPIC_API_KEY"] = v
-	}
-	if env["CLAUDE_CODE_OAUTH_TOKEN"] == "" && env["ANTHROPIC_API_KEY"] == "" {
-		fmt.Fprintln(os.Stderr, "claudio create: no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in this shell's environment.")
-		fmt.Fprintln(os.Stderr, "claudio create: run `claude setup-token` and export the result first (see docs/architecture.md §8.1).")
+	env, ok := credentialEnv("claudio create")
+	if !ok {
 		return 1
 	}
 

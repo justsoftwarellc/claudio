@@ -124,6 +124,29 @@ func (s *Store) ReleasePorts(ctx context.Context, instanceID string) error {
 	return nil
 }
 
+// ReleasePort frees a single port reservation — the mechanism behind
+// `claudio ports <id> --remove <container>` (ROD-98). Unlike ReleasePorts,
+// this only ever touches the store: removing a mapping from an already-
+// running container's published ports is not possible without recreating
+// it (Docker cannot drop a binding from a running container, the same
+// asymmetry that makes --add require a restart), so the caller is
+// expected to warn the user that the change takes effect on the next
+// `claudio restart`, not immediately.
+func (s *Store) ReleasePort(ctx context.Context, instanceID string, containerPort int) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM port_mappings WHERE instance_id = ? AND container_port = ?`, instanceID, containerPort)
+	if err != nil {
+		return fmt.Errorf("store: release port %d for %s: %w", containerPort, instanceID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: release port %d for %s: %w", containerPort, instanceID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("store: instance %s has no mapping for container port %d", instanceID, containerPort)
+	}
+	return nil
+}
+
 func (s *Store) PortMappings(ctx context.Context, instanceID string) ([]PortMapping, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT instance_id, container_port, host_port, protocol, service_name, source, detected_from, status

@@ -33,6 +33,16 @@ func run(args []string) int {
 		return cmdDestroy(ctx, args[1:])
 	case "cd":
 		return cmdCd(ctx, args[1:])
+	case "status":
+		return cmdStatus(ctx, args[1:])
+	case "ports":
+		return cmdPorts(ctx, args[1:])
+	case "stop":
+		return cmdStop(ctx, args[1:])
+	case "start":
+		return cmdStart(ctx, args[1:])
+	case "restart":
+		return cmdRestart(ctx, args[1:])
 	case "adopt":
 		return cmdAdopt(ctx, args[1:])
 	case "forget":
@@ -58,13 +68,16 @@ Usage:
   claudio ls [--all] [--json]     list instances (phase 1: sorted by creation time)
   claudio attach <id>             attach to an instance's Claude Code session
   claudio cd <id>                 print an instance's workspace path
+  claudio status <id>             show one instance's detail view
+  claudio ports <id> [--add c] [--remove c]
+                                   show or amend an instance's port mappings
+  claudio stop <id>               remove an instance's container, keep its workspace
+  claudio start <id> [--fresh]    re-provision a container for a stopped instance
+  claudio restart <id> [--fresh]  stop then start (resumes the session unless --fresh)
   claudio destroy <id> [--keep-workspace]
                                    remove an instance's container (and worktree)
   claudio adopt <container>       reconcile an untracked container into the store
   claudio forget <container>      remove an untracked container permanently
   claudio daemon status           report daemon status (phase 1: no daemon yet — see ROD-95)
-  claudio help                    show this message
-
-Not yet implemented (see docs/architecture.md, phasing): status, ports,
-stop/start/restart.`)
+  claudio help                    show this message`)
 }

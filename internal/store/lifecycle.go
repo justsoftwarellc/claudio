@@ -24,8 +24,14 @@ var provisionStepEdges = map[ProvisionStep][]ProvisionStep{
 	StepPortsReady:  {StepPortsReady, StepConfigReady, StepFailed},
 	StepConfigReady: {StepConfigReady, StepContainerUp, StepFailed},
 	StepContainerUp: {StepContainerUp, StepHealthy, StepFailed},
-	StepHealthy:     {StepHealthy}, // terminal
-	StepFailed:      {StepFailed, StepPending},
+	// StepHealthy -> StepPending: not a dead end after all — `claudio
+	// stop` followed by `claudio start` (or `restart`, ROD-99/ROD-100)
+	// re-provisions a fresh container for the same instance row, which
+	// walks the sub-state machine from the top again. "Terminal" only
+	// meant "nothing left to do while this container is up", not "this
+	// row can never provision again."
+	StepHealthy: {StepHealthy, StepPending},
+	StepFailed:  {StepFailed, StepPending},
 }
 
 // desiredStateEdges is the top-level lifecycle from docs/architecture.md

@@ -6,9 +6,14 @@
 // container assertions can observe an internal/engine test's
 // still-running fixture container mid-test, since neither package
 // namespaces by more than a label neither owns exclusively. Run with
-// `go test ./... -p 1` (or accept occasional cross-package flakiness)
-// until there's a CI setup to enforce this — there is no CI config in
-// this repo yet.
+// `go test ./... -p 1` — but note that even `-p 1` only serializes which
+// package's test *binary* runs at a time, not the OS-level ports Docker
+// hands out to already-running containers from a package that just
+// finished: an occasional flake has an internal/core AllocatePort probe
+// lose a real bind() race to a not-yet-torn-down internal/engine fixture
+// container holding the exact same ephemeral host port. Confirmed
+// transient by rerunning; there is no CI setup to enforce any of this —
+// there is no CI config in this repo yet.
 package engine
 
 import (

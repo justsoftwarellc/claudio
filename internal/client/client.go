@@ -49,6 +49,35 @@ type Client interface {
 	// it (ROD-99).
 	Forget(ctx context.Context, containerID string) error
 
+	// Status resolves one instance merged with live Docker state — the
+	// single-instance counterpart to ListInstances, for `claudio status
+	// <id>` (ROD-100).
+	Status(ctx context.Context, idOrName string) (core.InstanceView, error)
+
+	// Stop removes an instance's container and releases its ports,
+	// keeping the worktree and home/ on disk (ROD-99/ROD-100).
+	Stop(ctx context.Context, idOrName string) error
+
+	// Start re-provisions a container for a StateStopped instance —
+	// fresh wipes home/ first instead of resuming the existing Claude
+	// Code session (ROD-99/ROD-100). env carries the credential to inject
+	// into the new container, same as Create's params.Env — a stopped
+	// instance's old container held no reference to it, so it must be
+	// supplied again.
+	Start(ctx context.Context, idOrName string, fresh bool, env map[string]string) (core.CreateResult, error)
+
+	// Restart is Stop followed by Start as one operation (ROD-100).
+	Restart(ctx context.Context, idOrName string, fresh bool, env map[string]string) (core.CreateResult, error)
+
+	// AddPort reserves a new host port for an existing instance —
+	// effective on the instance's next Restart, not immediately, since
+	// Docker cannot add a binding to a running container (ROD-98).
+	AddPort(ctx context.Context, idOrName string, containerPort int) (hostPort int, err error)
+
+	// RemovePort releases a host port reservation — same
+	// takes-effect-on-restart caveat as AddPort (ROD-98).
+	RemovePort(ctx context.Context, idOrName string, containerPort int) error
+
 	// DockerHost is the resolved runtime.docker_host used for this
 	// client's Docker calls — attach needs it directly since it execs
 	// into `docker`/the SDK itself rather than going through Client

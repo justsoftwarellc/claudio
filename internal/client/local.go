@@ -39,9 +39,22 @@ func (l *Local) RuntimeInfo(ctx context.Context) (core.RuntimeView, error) {
 // image — docs/architecture.md §12.3's three-layer resolution) so the
 // CLI layer only ever supplies what the user actually typed.
 func (l *Local) Create(ctx context.Context, params core.CreateParams) (core.CreateResult, error) {
-	workspaceRoot, err := expandHome(l.global.WorkspaceRoot)
+	params, err := l.resolveCreateParams(params)
 	if err != nil {
 		return core.CreateResult{}, err
+	}
+	return core.CreateInstance(ctx, l.store, params)
+}
+
+// resolveCreateParams fills in the resolved-global-config fields shared
+// by Create, Start, and Restart — all three provision a container the
+// same way (Start/Restart re-run it for an existing instance rather than
+// a new one), so they must not drift on where workspace root, docker
+// host, port range, image, and resources come from.
+func (l *Local) resolveCreateParams(params core.CreateParams) (core.CreateParams, error) {
+	workspaceRoot, err := expandHome(l.global.WorkspaceRoot)
+	if err != nil {
+		return core.CreateParams{}, err
 	}
 	params.WorkspaceRoot = workspaceRoot
 	params.DockerHost = l.global.Runtime.DockerHost
@@ -53,7 +66,7 @@ func (l *Local) Create(ctx context.Context, params core.CreateParams) (core.Crea
 	if params.Resources == (engine.ResourceLimits{}) {
 		mem, err := engine.ParseMemory(derefStr(l.global.Resources.Memory))
 		if err != nil {
-			return core.CreateResult{}, err
+			return core.CreateParams{}, err
 		}
 		params.Resources = engine.ResourceLimits{
 			MemoryBytes: mem,
@@ -61,7 +74,7 @@ func (l *Local) Create(ctx context.Context, params core.CreateParams) (core.Crea
 			PIDs:        int64(derefInt(l.global.Resources.PIDs)),
 		}
 	}
-	return core.CreateInstance(ctx, l.store, params)
+	return params, nil
 }
 
 func (l *Local) GetInstance(ctx context.Context, idOrName string) (store.Instance, error) {
@@ -84,6 +97,38 @@ func (l *Local) Adopt(ctx context.Context, containerID string, createdAt int64) 
 
 func (l *Local) Forget(ctx context.Context, containerID string) error {
 	return core.ForgetContainer(ctx, l.global.Runtime.DockerHost, containerID)
+}
+
+func (l *Local) Status(ctx context.Context, idOrName string) (core.InstanceView, error) {
+	return core.GetInstanceView(ctx, l.store, l.global.Runtime.DockerHost, idOrName)
+}
+
+func (l *Local) Stop(ctx context.Context, idOrName string) error {
+	return core.StopInstance(ctx, l.store, l.global.Runtime.DockerHost, idOrName)
+}
+
+func (l *Local) Start(ctx context.Context, idOrName string, fresh bool, env map[string]string) (core.CreateResult, error) {
+	params, err := l.resolveCreateParams(core.CreateParams{Env: env})
+	if err != nil {
+		return core.CreateResult{}, err
+	}
+	return core.StartInstance(ctx, l.store, params, idOrName, fresh)
+}
+
+func (l *Local) Restart(ctx context.Context, idOrName string, fresh bool, env map[string]string) (core.CreateResult, error) {
+	params, err := l.resolveCreateParams(core.CreateParams{Env: env})
+	if err != nil {
+		return core.CreateResult{}, err
+	}
+	return core.RestartInstance(ctx, l.store, l.global.Runtime.DockerHost, params, idOrName, fresh)
+}
+
+func (l *Local) AddPort(ctx context.Context, idOrName string, containerPort int) (int, error) {
+	return core.AddPort(ctx, l.store, idOrName, containerPort, l.global.Ports.Range[0], l.global.Ports.Range[1])
+}
+
+func (l *Local) RemovePort(ctx context.Context, idOrName string, containerPort int) error {
+	return core.RemovePort(ctx, l.store, idOrName, containerPort)
 }
 
 func (l *Local) DockerHost() string {

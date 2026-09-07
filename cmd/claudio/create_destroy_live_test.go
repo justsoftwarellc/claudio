@@ -43,19 +43,16 @@ func runGitCLI(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// TestCreateAttachDestroyEndToEnd exercises ROD-100's core loop through
-// the actual CLI dispatcher (run(), not the Client interface directly),
-// against a real Docker daemon: `create` provisions a container, `cd`
-// reports its worktree, `destroy` tears it down. `attach` itself is not
-// exercised here — it syscall.Execs and replaces the test process by
-// design (see cmdAttach's doc) — but resolving the instance for it
-// (GetInstance, container naming) is covered indirectly by `cd` using
-// the same lookup path.
-//
-// Uses "alpine" + a long-running Cmd rather than the real claudio/base
-// image, matching internal/engine and internal/core's own tests — this
-// test verifies the CLI's wiring (flag parsing, env passthrough, Client
-// plumbing), not the image build (ROD-96, separately verified).
+// TestCreateAttachDestroyEndToEnd exercises ROD-100's full command
+// surface through the actual CLI dispatcher (run(), not the Client
+// interface directly), against a real Docker daemon: `create`
+// provisions a container, `cd`/`status`/`ports` inspect it, `ports
+// --add`/`--remove` amend its port reservations, `stop`/`start`/
+// `restart` cycle its container, and `destroy` tears it down. `attach`
+// itself is not exercised here — it syscall.Execs and replaces the test
+// process by design (see cmdAttach's doc) — but resolving the instance
+// for it (GetInstance, container naming) is covered indirectly by `cd`
+// using the same lookup path.
 func TestCreateAttachDestroyEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	if _, err := engine.DetectRuntime(ctx, ""); err != nil {
@@ -109,6 +106,45 @@ func TestCreateAttachDestroyEndToEnd(t *testing.T) {
 
 	if code := run([]string{"cd", id}); code != 0 {
 		t.Errorf("claudio cd %s exited %d, want 0", id, code)
+	}
+
+	if code := run([]string{"status", id}); code != 0 {
+		t.Errorf("claudio status %s exited %d, want 0", id, code)
+	}
+
+	if code := run([]string{"ports", id}); code != 0 {
+		t.Errorf("claudio ports %s exited %d, want 0", id, code)
+	}
+	if code := run([]string{"ports", id, "--add", "9229"}); code != 0 {
+		t.Errorf("claudio ports %s --add 9229 exited %d, want 0", id, code)
+	}
+	if code := run([]string{"ports", id, "--remove", "9229"}); code != 0 {
+		t.Errorf("claudio ports %s --remove 9229 exited %d, want 0", id, code)
+	}
+
+	if code := run([]string{"stop", id}); code != 0 {
+		t.Errorf("claudio stop %s exited %d, want 0", id, code)
+	}
+	if code := run([]string{"start", id}); code != 0 {
+		t.Errorf("claudio start %s exited %d, want 0", id, code)
+	}
+	if code := run([]string{"restart", id}); code != 0 {
+		t.Errorf("claudio restart %s exited %d, want 0", id, code)
+	}
+
+	// Restart replaced the container this test's cleanup already knew
+	// about — fetch the current one so cleanup removes the right ID.
+	c3, err := newClient(ctx)
+	if err != nil {
+		t.Fatalf("newClient (post-restart): %v", err)
+	}
+	instancesAfterRestart, _, err := c3.ListInstances(ctx)
+	c3.Close()
+	if err != nil {
+		t.Fatalf("ListInstances (post-restart): %v", err)
+	}
+	if len(instancesAfterRestart) == 1 && instancesAfterRestart[0].ContainerID != nil {
+		containerID = instancesAfterRestart[0].ContainerID
 	}
 
 	if code := run([]string{"destroy", id}); code != 0 {
