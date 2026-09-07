@@ -1,0 +1,322 @@
+// Package repo implements Claudio's repository model: one clone per repo
+// ("root"), one git worktree per session. See docs/architecture.md §5.1
+// and Appendix B.
+//
+// All git operations here shell out to the host `git` binary rather than
+// using a Go git library — worktree administrative files (relative gitdir
+// pointers, the reverse pointer under main-clone/.git/worktrees/<name>)
+// are exact-format-sensitive, and shelling out guarantees byte-for-byte
+// the same behavior a human running git would see, which is what the
+// verified fix in Appendix B depends on.
+package repo
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+)
+
+// Root is one repository's clone directory: <workspace>/repos/<slug>.
+// MainClone holds .git and the object store; Worktrees holds one
+// subdirectory per session.
+type Root struct {
+	Path      string
+	MainClone string
+	Worktrees string
+}
+
+func rootPaths(workspaceRoot, slug string) Root {
+	root := filepath.Join(workspaceRoot, "repos", slug)
+	return Root{
+		Path:      root,
+		MainClone: filepath.Join(root, "main-clone"),
+		Worktrees: filepath.Join(root, "worktrees"),
+	}
+}
+
+// Slug derives the on-disk root directory name from a repo URL, e.g.
+// "git@github.com:acme/web.git" -> "github.com-acme-web". Deterministic so
+// a second `create` against the same repo finds the same root rather than
+// cloning again.
+func Slug(repoURL string) (string, error) {
+	host, path, err := parseRepoURL(repoURL)
+	if err != nil {
+		return "", err
+	}
+	path = strings.TrimSuffix(path, ".git")
+	path = strings.Trim(path, "/")
+	slug := host + "-" + strings.ReplaceAll(path, "/", "-")
+	if slug == "" {
+		return "", fmt.Errorf("repo: empty slug derived from %q", repoURL)
+	}
+	return slug, nil
+}
+
+var (
+	scpLikeRe = regexp.MustCompile(`^(?:[\w.-]+@)?([\w.-]+):(.+)$`)
+)
+
+// parseRepoURL accepts git@host:path, ssh://[user@]host/path, and
+// https://host/path, and returns (host, path). Local-path cloning is
+// deliberately unsupported (docs/architecture.md §5.1) so this never
+// needs to handle a bare filesystem path.
+func parseRepoURL(repoURL string) (host, path string, err error) {
+	switch {
+	case strings.HasPrefix(repoURL, "file://"):
+		// Only reachable via a test/CI mirror URL, never via NormalizeSSH
+		// (docs/architecture.md §5.1 rules out local-path cloning as user
+		// input). Still needs a slug so EnsureRoot can derive a root dir.
+		return "local", strings.TrimPrefix(repoURL, "file://"), nil
+	case strings.HasPrefix(repoURL, "ssh://"), strings.HasPrefix(repoURL, "https://"), strings.HasPrefix(repoURL, "http://"):
+		rest := repoURL
+		rest = strings.TrimPrefix(rest, "ssh://")
+		rest = strings.TrimPrefix(rest, "https://")
+		rest = strings.TrimPrefix(rest, "http://")
+		if at := strings.Index(rest, "@"); at != -1 && strings.Index(rest, "/") > at {
+			rest = rest[at+1:]
+		}
+		slash := strings.Index(rest, "/")
+		if slash == -1 {
+			return "", "", fmt.Errorf("repo: cannot parse URL %q", repoURL)
+		}
+		return rest[:slash], rest[slash+1:], nil
+	default:
+		m := scpLikeRe.FindStringSubmatch(repoURL)
+		if m == nil {
+			return "", "", fmt.Errorf("repo: cannot parse URL %q", repoURL)
+		}
+		return m[1], m[2], nil
+	}
+}
+
+// NormalizeSSH turns an HTTPS GitHub URL or an "owner/repo" shorthand into
+// an SSH clone URL, per docs/architecture.md §5.1: "always a remote GitHub
+// URL, cloned over SSH." A URL that is already SSH-shaped passes through
+// unchanged.
+func NormalizeSSH(input string) (string, error) {
+	switch {
+	case strings.HasPrefix(input, "git@"):
+		return input, nil
+	case strings.HasPrefix(input, "https://github.com/"):
+		rest := strings.TrimPrefix(input, "https://github.com/")
+		rest = strings.TrimSuffix(rest, ".git")
+		if rest == "" {
+			return "", fmt.Errorf("repo: cannot parse URL %q", input)
+		}
+		return fmt.Sprintf("git@github.com:%s.git", rest), nil
+	case strings.Contains(input, "/") && !strings.Contains(input, ":") && !strings.Contains(input, "@"):
+		// "acme/web" shorthand.
+		if strings.Count(input, "/") != 1 {
+			return "", fmt.Errorf("repo: cannot parse shorthand %q", input)
+		}
+		return fmt.Sprintf("git@github.com:%s.git", input), nil
+	default:
+		return "", fmt.Errorf("repo: cannot parse URL %q", input)
+	}
+}
+
+// EnsureRoot returns the Root for repoURL, cloning it on the host over SSH
+// if it does not already exist on disk. The clone is bare-ish in spirit
+// but a normal (non-bare) clone: main-clone is a real checkout of the
+// default branch, which the first worktree is added alongside.
+//
+// Cloning happens at most once per repo (docs/architecture.md §5.1):
+// subsequent calls for the same repoURL are a no-op fast path.
+func EnsureRoot(ctx context.Context, workspaceRoot, repoURL string) (Root, error) {
+	slug, err := Slug(repoURL)
+	if err != nil {
+		return Root{}, err
+	}
+	root := rootPaths(workspaceRoot, slug)
+
+	if _, err := os.Stat(filepath.Join(root.MainClone, ".git")); err == nil {
+		return root, nil // already cloned
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Root{}, fmt.Errorf("repo: stat %s: %w", root.MainClone, err)
+	}
+
+	if err := os.MkdirAll(root.Worktrees, 0o755); err != nil {
+		return Root{}, fmt.Errorf("repo: create root %s: %w", root.Path, err)
+	}
+	if _, err := runGit(ctx, "", "clone", repoURL, root.MainClone); err != nil {
+		return Root{}, fmt.Errorf("repo: clone %s: %w", repoURL, err)
+	}
+	return root, nil
+}
+
+// InitRoot creates a Root for a greenfield initiative with no upstream
+// repo (docs/architecture.md §5.1: `claudio create --new <name>`).
+// main-clone is `git init`ed instead of cloned.
+func InitRoot(ctx context.Context, workspaceRoot, name string) (Root, error) {
+	root := rootPaths(workspaceRoot, name)
+	if _, err := os.Stat(filepath.Join(root.MainClone, ".git")); err == nil {
+		return Root{}, fmt.Errorf("repo: root %q already exists", name)
+	}
+	if err := os.MkdirAll(root.MainClone, 0o755); err != nil {
+		return Root{}, fmt.Errorf("repo: create root %s: %w", root.Path, err)
+	}
+	if err := os.MkdirAll(root.Worktrees, 0o755); err != nil {
+		return Root{}, fmt.Errorf("repo: create worktrees dir: %w", err)
+	}
+	if _, err := runGit(ctx, root.MainClone, "init"); err != nil {
+		return Root{}, fmt.Errorf("repo: init %s: %w", name, err)
+	}
+	if _, err := runGit(ctx, root.MainClone, "commit", "--allow-empty", "-m", "Initial commit"); err != nil {
+		return Root{}, fmt.Errorf("repo: initial commit for %s: %w", name, err)
+	}
+	return root, nil
+}
+
+// BranchCollisionError reports that a branch is already checked out in
+// another worktree, naming which one — docs/architecture.md §5.1 requires
+// surfacing the holder and a way forward, never just a bare error.
+type BranchCollisionError struct {
+	Branch      string
+	WorktreeDir string // the other worktree's path, as git reports it
+}
+
+func (e *BranchCollisionError) Error() string {
+	return fmt.Sprintf("branch %q is already checked out at %s", e.Branch, e.WorktreeDir)
+}
+
+// AddWorktree creates a new worktree named id, checking out branch
+// (creating it from the default branch first if newBranch is true), then
+// rewrites the gitdir pointers to relative paths per Appendix B so the
+// worktree remains valid both on the host and when only the repo root is
+// mounted into a container.
+//
+// Returns *BranchCollisionError if branch is already checked out
+// elsewhere; callers are expected to offer the caller a suggested
+// alternative name (docs/architecture.md §5.1) rather than just
+// propagating the error.
+func AddWorktree(ctx context.Context, root Root, id, branch string, newBranch bool) (worktreeDir string, err error) {
+	worktreeDir = filepath.Join(root.Worktrees, id)
+
+	args := []string{"worktree", "add"}
+	if newBranch {
+		args = append(args, "-b", branch, worktreeDir)
+	} else {
+		args = append(args, worktreeDir, branch)
+	}
+
+	out, err := runGit(ctx, root.MainClone, args...)
+	if err != nil {
+		if held, ok := parseWorktreeCollision(out); ok {
+			return "", &BranchCollisionError{Branch: branch, WorktreeDir: held}
+		}
+		return "", fmt.Errorf("repo: add worktree %s: %w", id, err)
+	}
+
+	if err := relativizeGitdir(root, id); err != nil {
+		return "", err
+	}
+	return worktreeDir, nil
+}
+
+var worktreeCollisionRe = regexp.MustCompile(`already (?:used|checked out) (?:by|at) worktree ['"]?([^'"\s]+)['"]?|already checked out at '([^']+)'`)
+
+func parseWorktreeCollision(gitOutput string) (heldAt string, ok bool) {
+	if !strings.Contains(gitOutput, "already") {
+		return "", false
+	}
+	m := worktreeCollisionRe.FindStringSubmatch(gitOutput)
+	if m == nil {
+		return "", false
+	}
+	if m[1] != "" {
+		return m[1], true
+	}
+	return m[2], true
+}
+
+// relativizeGitdir rewrites the two gitdir pointers created by `git
+// worktree add` from absolute host paths to paths relative to each
+// other, per the verified fix in docs/architecture.md Appendix B. Without
+// this, a container that mounts only the repo root (not the host's
+// absolute path) cannot resolve either pointer.
+func relativizeGitdir(root Root, id string) error {
+	worktreeGitFile := filepath.Join(root.Worktrees, id, ".git")
+	adminDir := filepath.Join(root.MainClone, ".git", "worktrees", id)
+	reverseGitdirFile := filepath.Join(adminDir, "gitdir")
+
+	if _, err := os.Stat(adminDir); err != nil {
+		return fmt.Errorf("repo: worktree admin dir missing after add: %w", err)
+	}
+
+	// worktrees/<id>/.git -> "gitdir: ../../main-clone/.git/worktrees/<id>"
+	relGitdir := filepath.Join("..", "..", "main-clone", ".git", "worktrees", id)
+	if err := os.WriteFile(worktreeGitFile, []byte("gitdir: "+relGitdir+"\n"), 0o644); err != nil {
+		return fmt.Errorf("repo: rewrite %s: %w", worktreeGitFile, err)
+	}
+
+	// main-clone/.git/worktrees/<id>/gitdir -> "../../worktrees/<id>/.git"
+	relReverse := filepath.Join("..", "..", "worktrees", id, ".git")
+	if err := os.WriteFile(reverseGitdirFile, []byte(relReverse+"\n"), 0o644); err != nil {
+		return fmt.Errorf("repo: rewrite %s: %w", reverseGitdirFile, err)
+	}
+	return nil
+}
+
+// RemoveWorktree removes worktree id via `git worktree remove` and prunes
+// stale administrative metadata. The root and its object store are left
+// untouched (docs/architecture.md §5.1: "the root and its objects stay");
+// orphaned roots are reclaimed separately by `claudio gc` (ROD-107).
+//
+// Removal restores the reverse gitdir pointer to an absolute host path
+// first: git's own `worktree remove`/`worktree list` machinery validates
+// that pointer and refuses to operate ("does not contain absolute path to
+// the working tree location") once it has been relativized for the
+// container boundary (relativizeGitdir). That is safe to do here because
+// removal always runs on the host, where the absolute path is valid.
+func RemoveWorktree(ctx context.Context, root Root, id string) error {
+	reverseGitdirFile := filepath.Join(root.MainClone, ".git", "worktrees", id, "gitdir")
+	absPointer := filepath.Join(root.Worktrees, id, ".git") + "\n"
+	if err := os.WriteFile(reverseGitdirFile, []byte(absPointer), 0o644); err != nil {
+		return fmt.Errorf("repo: restore absolute gitdir for %s: %w", id, err)
+	}
+
+	if _, err := runGit(ctx, root.MainClone, "worktree", "remove", "--force", filepath.Join(root.Worktrees, id)); err != nil {
+		return fmt.Errorf("repo: remove worktree %s: %w", id, err)
+	}
+	if _, err := runGit(ctx, root.MainClone, "worktree", "prune"); err != nil {
+		return fmt.Errorf("repo: prune worktrees: %w", err)
+	}
+	return nil
+}
+
+// SuggestBranchName returns branch with a numeric suffix incremented past
+// any name for which exists returns true, e.g. "feat/auth" ->
+// "feat/auth-2" -> "feat/auth-3". docs/architecture.md §5.1.
+func SuggestBranchName(branch string, exists func(candidate string) bool) string {
+	if !exists(branch) {
+		return branch
+	}
+	for n := 2; ; n++ {
+		candidate := fmt.Sprintf("%s-%d", branch, n)
+		if !exists(candidate) {
+			return candidate
+		}
+	}
+}
+
+// BranchExists reports whether branch is a known local branch in the
+// repo's main clone.
+func BranchExists(ctx context.Context, root Root, branch string) bool {
+	_, err := runGit(ctx, root.MainClone, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	return err == nil
+}
+
+func runGit(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
