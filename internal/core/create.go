@@ -43,6 +43,15 @@ type CreateParams struct {
 	PortRangeLow  int
 	PortRangeHigh int
 	DockerHost    string
+
+	// CleanOnFail reverses the default in docs/architecture.md §4.1/
+	// ROD-99 ("FAILED preserves the workspace for inspection unless
+	// --clean-on-fail"): when true, a failure during provisioning removes
+	// the worktree this call already created, instead of leaving it for
+	// the user to inspect. Only applies once a worktree actually exists —
+	// a failure before that point (branch resolution, worktree creation
+	// itself) has nothing to clean up.
+	CleanOnFail bool
 }
 
 // CreateResult is what a caller (the CLI) needs to report success.
@@ -114,7 +123,18 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 
 	containerID, ports, err := provisionContainer(ctx, st, id, root.Path, worktreeDir, createdAt, params, cmd)
 	if err != nil {
-		return CreateResult{}, err // provisionContainer already marks StepFailed
+		// provisionContainer already marks StepFailed; CleanOnFail is the
+		// one additional thing left to the caller (ROD-99's
+		// --clean-on-fail), since provisionContainer has no params.
+		// CleanOnFail field of its own to act on (StartInstance shares it
+		// and must never delete a worktree on a *re*-provisioning
+		// failure — the instance already existed before that call).
+		if params.CleanOnFail {
+			if rmErr := repo.RemoveWorktree(ctx, root, id); rmErr != nil {
+				return CreateResult{}, fmt.Errorf("%w (also failed to clean up worktree: %v)", err, rmErr)
+			}
+		}
+		return CreateResult{}, err
 	}
 
 	mappings := make([]store.PortMapping, 0, len(ports))

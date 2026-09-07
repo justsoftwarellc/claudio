@@ -12,16 +12,18 @@ import (
 )
 
 // cmdCreate implements `claudio create <repo> [--branch B | --new-branch
-// B] [--name N] [--ports c:h,...]`. See docs/architecture.md §5.1/§9 and
-// ROD-100. The credential comes from credentialEnv (see env.go).
+// B] [--name N] [--ports c:h,...] [--clean-on-fail]`. See
+// docs/architecture.md §5.1/§9 and ROD-100. The credential comes from
+// credentialEnv (see env.go).
 func cmdCreate(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo> [--branch B | --new-branch B] [--name N] [--ports container:host,...]")
+		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo> [--branch B | --new-branch B] [--name N] [--ports container:host,...] [--clean-on-fail]")
 		return 1
 	}
 
 	repoURL := args[0]
 	var branch, newBranch, name, portsFlag string
+	var cleanOnFail bool
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--branch":
@@ -52,6 +54,8 @@ func cmdCreate(ctx context.Context, args []string) int {
 				return 1
 			}
 			portsFlag = args[i]
+		case "--clean-on-fail":
+			cleanOnFail = true
 		default:
 			fmt.Fprintf(os.Stderr, "claudio create: unknown flag %q\n", args[i])
 			return 1
@@ -93,6 +97,7 @@ func cmdCreate(ctx context.Context, args []string) int {
 		Name:        namePtr,
 		ManualPorts: manualPorts,
 		Env:         env,
+		CleanOnFail: cleanOnFail,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio create:", err)
