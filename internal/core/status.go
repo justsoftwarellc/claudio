@@ -12,6 +12,7 @@ import (
 type StatusStore interface {
 	GetInstance(ctx context.Context, idOrName string) (store.Instance, error)
 	PortMappings(ctx context.Context, instanceID string) ([]store.PortMapping, error)
+	TransitionDesiredState(ctx context.Context, instanceID string, to store.DesiredState) error
 }
 
 // GetInstanceView resolves one instance (by ID, name, or the store's own
@@ -33,6 +34,7 @@ func GetInstanceView(ctx context.Context, st StatusStore, dockerHost, idOrName s
 	}
 
 	view := InstanceView{Instance: inst, Ports: ports}
+	foundContainer := false
 
 	if inst.ContainerID != nil && *inst.ContainerID != "" {
 		containers, err := engine.ListClaudioContainers(ctx, dockerHost, true)
@@ -43,6 +45,7 @@ func GetInstanceView(ctx context.Context, st StatusStore, dockerHost, idOrName s
 			if cs.ContainerID != *inst.ContainerID {
 				continue
 			}
+			foundContainer = true
 			view.ContainerRunning = cs.Running
 			view.ContainerStatus = cs.Status
 			if !cs.Running {
@@ -51,6 +54,20 @@ func GetInstanceView(ctx context.Context, st StatusStore, dockerHost, idOrName s
 				}
 			}
 			break
+		}
+	}
+
+	// Same inline correction ListInstances applies (ROD-99's lazy
+	// reconciler), same StepHealthy guard (see ListInstances' comment for
+	// why: an instance still mid-provision legitimately has no container
+	// yet, which is not this situation): the store still says running,
+	// but no container backs this instance any more — persist
+	// StateStopped so the next command (e.g. `claudio start`) sees
+	// accurate stored intent. A failure here is not fatal to this status
+	// view itself.
+	if !foundContainer && inst.DesiredState == store.StateRunning && inst.ProvisionStep == store.StepHealthy {
+		if err := st.TransitionDesiredState(ctx, inst.ID, store.StateStopped); err == nil {
+			view.DesiredState = store.StateStopped
 		}
 	}
 

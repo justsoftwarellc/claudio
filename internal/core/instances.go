@@ -17,14 +17,25 @@ import (
 type InstanceStore interface {
 	ListInstances(ctx context.Context) ([]store.Instance, error)
 	PortMappings(ctx context.Context, instanceID string) ([]store.PortMapping, error)
+	TransitionDesiredState(ctx context.Context, instanceID string, to store.DesiredState) error
 }
 
 // ListInstances merges the store's intent with Docker's observed reality
 // — see docs/architecture.md §10.1. A container's running/exited status,
 // and whether it was OOM-killed (ROD-112), are read live and never
-// trusted from the store; that is what makes this call correct by
-// construction when a container is killed out-of-band, rather than
-// needing a background reconciler to notice.
+// trusted from the store; that is what makes what's *printed* correct by
+// construction when a container is killed out-of-band, without waiting
+// for a background reconciler to notice.
+//
+// It also persists the one unambiguous correction from ROD-99's lazy
+// reconciler (the "runs as part of whatever command next touches an
+// instance" design, never a background loop in phase 1): an instance the
+// store still calls StateRunning whose container is simply gone gets
+// transitioned to StateStopped here, so the *stored* desired_state
+// catches up too — e.g. so a later `claudio start` sees StateStopped
+// instead of refusing with "instance is running, not stopped." This does
+// not change what this call itself prints (the view already reflects
+// live reality regardless), only what the next call sees.
 //
 // dockerHost is the resolved runtime.docker_host from global config
 // (empty = auto-resolve, see engine.DetectRuntime).
@@ -66,6 +77,22 @@ func ListInstances(ctx context.Context, st InstanceStore, dockerHost string) ([]
 				// Inspect failures (container removed between list and
 				// inspect) are not fatal to ListInstances as a whole — the
 				// view simply reports OOMKilled=false, same as "unknown".
+			}
+		} else if inst.DesiredState == store.StateRunning && inst.ProvisionStep == store.StepHealthy {
+			// ActionMarkStopped's case, applied inline (ROD-99): the store
+			// still says running, but no container claims this instance —
+			// it is gone, whether via `docker rm` out of band or an OOM
+			// death that already got cleaned up. Guarded to StepHealthy
+			// only: an instance still mid-provision (StepPending through
+			// StepContainerUp) legitimately has no container yet — that is
+			// not the same situation and must not be mistaken for one
+			// (ActionResumeProvisioning is Reconcile's answer for that
+			// case, not this correction). A failure here is not fatal to
+			// the listing itself (the view already shows accurate live
+			// reality via ContainerRunning=false, the default), only the
+			// store's own bookkeeping falls further behind.
+			if err := st.TransitionDesiredState(ctx, inst.ID, store.StateStopped); err == nil {
+				view.DesiredState = store.StateStopped
 			}
 		}
 		views = append(views, view)
