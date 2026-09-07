@@ -311,6 +311,67 @@ func BranchExists(ctx context.Context, root Root, branch string) bool {
 	return err == nil
 }
 
+const envFileRelPath = ".claudio/env"
+
+// ExcludeClaudioDir adds .claudio/ to the main clone's
+// .git/info/exclude, so CopyEnvFile's target directory is never
+// accidentally committed or shown as untracked by `git status` inside
+// any worktree — docs/architecture.md §5.1: "--env-file copies a host
+// env file into the worktree at provision time. Add .claudio/ to
+// .git/info/exclude." info/exclude (not .gitignore) is used because
+// this is host-local provisioning behavior, not a rule the repo itself
+// should carry in its own committed history.
+//
+// Idempotent and safe to call on every create against the same repo
+// root: appends the line only if it isn't already present.
+func ExcludeClaudioDir(root Root) error {
+	excludePath := filepath.Join(root.MainClone, ".git", "info", "exclude")
+	existing, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("repo: read %s: %w", excludePath, err)
+	}
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(line) == ".claudio/" {
+			return nil // already present
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return fmt.Errorf("repo: create %s: %w", filepath.Dir(excludePath), err)
+	}
+	f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("repo: open %s: %w", excludePath, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(".claudio/\n"); err != nil {
+		return fmt.Errorf("repo: append to %s: %w", excludePath, err)
+	}
+	return nil
+}
+
+// CopyEnvFile copies hostPath's contents into worktreeDir/.claudio/env —
+// the `--env-file` mechanism from docs/architecture.md §5.1. Copies
+// verbatim; this package does not parse or validate the file's
+// contents, matching the doc's "copies a host env file into the
+// worktree" (not "injects it as container environment," which is a
+// separate, unrequested scope — the repo's own tooling, e.g. a dotenv
+// loader the agent runs, is what reads this file back).
+func CopyEnvFile(hostPath, worktreeDir string) error {
+	data, err := os.ReadFile(hostPath)
+	if err != nil {
+		return fmt.Errorf("repo: read env file %s: %w", hostPath, err)
+	}
+	dest := filepath.Join(worktreeDir, envFileRelPath)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return fmt.Errorf("repo: create %s: %w", filepath.Dir(dest), err)
+	}
+	if err := os.WriteFile(dest, data, 0o600); err != nil {
+		return fmt.Errorf("repo: write %s: %w", dest, err)
+	}
+	return nil
+}
+
 func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir

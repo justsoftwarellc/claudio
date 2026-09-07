@@ -67,7 +67,7 @@ func startInstanceWithCmd(ctx context.Context, st StartStore, params CreateParam
 		return CreateResult{}, fmt.Errorf("core: start %s: %w", inst.ID, err)
 	}
 
-	containerID, ports, err := provisionContainer(ctx, st, inst.ID, inst.RepoRoot, inst.WorktreeDir, inst.CreatedAt, params, cmd)
+	containerID, ports, err := provisionContainer(ctx, st, inst.ID, inst.RepoURL, inst.RepoRoot, inst.WorktreeDir, inst.CreatedAt, params, cmd)
 	if err != nil {
 		return CreateResult{}, err // provisionContainer already marks StepFailed
 	}

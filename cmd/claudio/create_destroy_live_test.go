@@ -164,3 +164,95 @@ func TestCreateAttachDestroyEndToEnd(t *testing.T) {
 		t.Errorf("len(instances) after destroy = %d, want 0", len(instancesAfter))
 	}
 }
+
+// TestCreateBranchCollisionSuggestsAlternative exercises ROD-97's
+// collision UX (retryCreateWithSuggestedBranch in create.go): a second
+// `create --new-branch` naming a branch the first instance already
+// checked out must not just error outright — it should retry once with
+// a suggested alternative name, taking it automatically under --yes.
+// Without --yes and under `go test`'s non-TTY stdin, it must fail fast
+// with the suggestion in the message rather than blocking on a stdin
+// read that will never resolve (docs/architecture.md §5.1's
+// "non-interactive-safe" requirement) — covered by the second half of
+// this test.
+func TestCreateBranchCollisionSuggestsAlternative(t *testing.T) {
+	ctx := context.Background()
+	if _, err := engine.DetectRuntime(ctx, ""); err != nil {
+		t.Skipf("no reachable Docker-API-compatible daemon: %v", err)
+	}
+	if err := exec.Command("docker", "image", "inspect", "claudio/base:dev").Run(); err != nil {
+		t.Skip("claudio/base:dev image not built locally — build it with `docker build -t claudio/base:dev image/` to run this test")
+	}
+	if out, err := exec.Command("docker", "tag", "claudio/base:dev", "claudio/base:latest").CombinedOutput(); err != nil {
+		t.Fatalf("docker tag: %v: %s", err, out)
+	}
+
+	t.Setenv("CLAUDIO_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+	repoURL := newLocalOriginRepoForCLI(t)
+
+	if code := run([]string{"create", repoURL, "--new-branch", "feat/auth"}); code != 0 {
+		t.Fatalf("first create exited %d, want 0", code)
+	}
+
+	// Second create names the same branch, without --yes. isInteractive()
+	// reads os.Stdin directly, and go test's own stdin isn't reliably a
+	// non-TTY across every environment this runs in (verified: it isn't,
+	// under this harness) — force it to a definite non-TTY source
+	// (/dev/null) for the duration of this call so the "non-interactive-
+	// safe" path is exercised deterministically rather than accidentally
+	// depending on how this test binary happens to be invoked.
+	origStdin := os.Stdin
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	os.Stdin = devNull
+	code := run([]string{"create", repoURL, "--new-branch", "feat/auth"})
+	devNull.Close()
+	os.Stdin = origStdin
+	if code == 0 {
+		t.Error("second create with a colliding branch, non-interactive stdin, and no --yes should fail, got exit 0")
+	}
+
+	// With --yes, it should succeed by taking the suggested alternative
+	// (feat/auth-2) automatically. Uses --new-branch feat/auth again
+	// (not feat/auth-2) since the failed attempt above never created
+	// anything for feat/auth-2 to collide with.
+	if code := run([]string{"create", repoURL, "--new-branch", "feat/auth", "--yes"}); code != 0 {
+		t.Fatalf("third create (--yes) exited %d, want 0", code)
+	}
+
+	c, err := newClient(ctx)
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+	defer c.Close()
+	instances, _, err := c.ListInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if len(instances) != 2 {
+		t.Fatalf("len(instances) = %d, want 2 (first create + the --yes retry)", len(instances))
+	}
+	for _, inst := range instances {
+		t.Cleanup(func(containerID *string) func() {
+			return func() {
+				if containerID != nil {
+					exec.Command("docker", "rm", "-f", *containerID).Run()
+				}
+			}
+		}(inst.ContainerID))
+	}
+
+	branches := map[string]bool{}
+	for _, inst := range instances {
+		branches[inst.Branch] = true
+	}
+	if !branches["feat/auth"] {
+		t.Error("expected one instance on feat/auth")
+	}
+	if !branches["feat/auth-2"] {
+		t.Error("expected the --yes retry to land on the suggested feat/auth-2")
+	}
+}

@@ -31,18 +31,30 @@ type CreateStore interface {
 // CreateParams is everything `claudio create` collects from flags and
 // resolved config before any provisioning starts.
 type CreateParams struct {
-	RepoURL       string
-	Branch        string // explicit --branch: check out, must already exist
-	NewBranch     string // explicit --new-branch: create from the default branch
-	Name          *string
-	ManualPorts   []portdetect.Manual
-	Env           map[string]string // credential + any extra vars, e.g. CLAUDE_CODE_OAUTH_TOKEN
-	WorkspaceRoot string            // global config's workspace_root, already expanded
-	Image         string
-	Resources     engine.ResourceLimits
-	PortRangeLow  int
-	PortRangeHigh int
-	DockerHost    string
+	RepoURL string
+	// GreenfieldName, when set, provisions a brand-new initiative with no
+	// upstream repo instead of cloning RepoURL — `claudio create --new
+	// <name>` (docs/architecture.md §5.1). RepoURL and Branch are ignored
+	// when this is set (a fresh git-init has no existing branch for
+	// Branch to check out); NewBranch still applies — it names the
+	// branch this call creates, defaulting to claudio/<id> like the
+	// cloned-repo path does, since the greenfield root's own main clone
+	// occupies its default branch and a worktree cannot also check that
+	// out (the same "one instance = one line of work" rule ROD-97
+	// verified for cloned repos).
+	GreenfieldName string
+	Branch         string // explicit --branch: check out, must already exist
+	NewBranch      string // explicit --new-branch: create from the default branch
+	Name           *string
+	ManualPorts    []portdetect.Manual
+	Env            map[string]string // credential + any extra vars, e.g. CLAUDE_CODE_OAUTH_TOKEN
+	EnvFile        string            // --env-file: host path to copy into the worktree at .claudio/env (docs/architecture.md §5.1)
+	WorkspaceRoot  string            // global config's workspace_root, already expanded
+	Image          string
+	Resources      engine.ResourceLimits
+	PortRangeLow   int
+	PortRangeHigh  int
+	DockerHost     string
 
 	// CleanOnFail reverses the default in docs/architecture.md §4.1/
 	// ROD-99 ("FAILED preserves the workspace for inspection unless
@@ -89,16 +101,43 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		return CreateResult{}, err
 	}
 
-	root, err := repo.EnsureRoot(ctx, params.WorkspaceRoot, params.RepoURL)
-	if err != nil {
-		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
-	}
-	if err := st.UpsertRepo(ctx, root.Path, params.RepoURL); err != nil {
-		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
-	}
+	var root repo.Root
+	var branch string
+	var newBranch bool
+	repoURL := params.RepoURL
 
-	branch, newBranch, err := resolveBranch(ctx, root, id, params)
-	if err != nil {
+	if params.GreenfieldName != "" {
+		// docs/architecture.md §5.1: no upstream repo, git-init a fresh
+		// root instead.
+		repoURL = "local:" + params.GreenfieldName // synthetic, for the repo_url column and claudio.repo label — never a real clone URL
+		root, err = repo.InitRoot(ctx, params.WorkspaceRoot, params.GreenfieldName)
+		if err != nil {
+			return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+		}
+		// InitRoot's main clone is itself a normal (non-bare) checkout of
+		// its default branch — verified empirically: a worktree cannot
+		// check out that same branch too, git refuses with "already
+		// checked out," the exact rule that makes "one instance = one
+		// line of work" structural for the cloned-repo path (ROD-97).
+		// So, same as that path's own default, this always creates a new
+		// branch off the current one (claudio/<id> unless the caller
+		// asked for something else) rather than reusing it directly.
+		branch = params.NewBranch
+		if branch == "" {
+			branch = "claudio/" + id
+		}
+		newBranch = true
+	} else {
+		root, err = repo.EnsureRoot(ctx, params.WorkspaceRoot, params.RepoURL)
+		if err != nil {
+			return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+		}
+		branch, newBranch, err = resolveBranch(ctx, root, id, params)
+		if err != nil {
+			return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+		}
+	}
+	if err := st.UpsertRepo(ctx, root.Path, repoURL); err != nil {
 		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
 	}
 
@@ -107,11 +146,20 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
 	}
 
+	if err := repo.ExcludeClaudioDir(root); err != nil {
+		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+	}
+	if params.EnvFile != "" {
+		if err := repo.CopyEnvFile(params.EnvFile, worktreeDir); err != nil {
+			return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+		}
+	}
+
 	createdAt := time.Now().Unix()
 	if err := st.CreateInstance(ctx, store.NewInstanceParams{
 		ID:          id,
 		Name:        params.Name,
-		RepoURL:     params.RepoURL,
+		RepoURL:     repoURL,
 		RepoRoot:    root.Path,
 		WorktreeDir: worktreeDir,
 		Branch:      branch,
@@ -121,7 +169,7 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
 	}
 
-	containerID, ports, err := provisionContainer(ctx, st, id, root.Path, worktreeDir, createdAt, params, cmd)
+	containerID, ports, err := provisionContainer(ctx, st, id, repoURL, root.Path, worktreeDir, createdAt, params, cmd)
 	if err != nil {
 		// provisionContainer already marks StepFailed; CleanOnFail is the
 		// one additional thing left to the caller (ROD-99's
@@ -164,7 +212,16 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 // or an existing STOPPED instance being brought back up by StartInstance
 // — see start.go). Shared so `create` and `start` cannot drift on what
 // "provisioning a container" actually does.
-func provisionContainer(ctx context.Context, st CreateStore, id, repoRoot, worktreeDir string, createdAt int64, params CreateParams, cmd []string) (containerID string, ports []resolvedPort, err error) {
+//
+// repoURL is taken as an explicit parameter rather than read from
+// params.RepoURL: CreateInstance resolves the *actual* repo URL to label
+// the container with itself (params.RepoURL is empty for the --new
+// greenfield path, which uses a synthetic "local:<name>" instead), and
+// StartInstance never has an original RepoURL in its params at all — it
+// only knows the instance ID until it loads the stored row. Passing it
+// explicitly is what avoids both callers needing to duplicate that
+// resolution or risk drifting on it.
+func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRoot, worktreeDir string, createdAt int64, params CreateParams, cmd []string) (containerID string, ports []resolvedPort, err error) {
 	if err := st.TransitionProvisionStep(ctx, id, store.StepRepoReady); err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
@@ -200,7 +257,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoRoot, workt
 
 	containerID, err = engine.CreateAndStart(ctx, params.DockerHost, engine.CreateSpec{
 		InstanceID:  id,
-		RepoURL:     params.RepoURL,
+		RepoURL:     repoURL,
 		CreatedAt:   createdAt,
 		Image:       params.Image,
 		Cmd:         cmd,
@@ -288,10 +345,17 @@ func resolveBranch(ctx context.Context, root repo.Root, id string, params Create
 		}
 		return params.Branch, false, nil
 	case params.NewBranch != "":
-		if repo.BranchExists(ctx, root, params.NewBranch) {
-			return "", false, fmt.Errorf("branch %q already exists; use --branch to check it out instead", params.NewBranch)
-		}
-		return params.NewBranch, true, nil
+		// A branch by this name already existing is not necessarily an
+		// error here — it's exactly docs/architecture.md §5.1's collision
+		// scenario ("claudio create acme/web --branch feat/auth" example,
+		// which applies just as much to --new-branch naming an existing
+		// branch by mistake or on purpose to join it). Check it out like
+		// --branch would (isNew=false) and let AddWorktree's own
+		// worktree-add report the real *repo.BranchCollisionError if it's
+		// actually held elsewhere, rather than pre-empting that with a
+		// plain "already exists" error that a caller can't distinguish
+		// from any other failure and can't retry against.
+		return params.NewBranch, !repo.BranchExists(ctx, root, params.NewBranch), nil
 	default:
 		return "claudio/" + id, true, nil
 	}
