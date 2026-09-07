@@ -66,6 +66,13 @@ RUN echo 'export PATH=/opt/claude-code/bin:$PATH' > /etc/profile.d/claudio-npm-g
 # container reusing an existing home/ must never clobber a real session's
 # onboarding/trust state with the template again.
 #
+# __CLAUDIO_WORKDIR__ is substituted by entrypoint.sh with the container's
+# actual $PWD at boot — found empirically while implementing ROD-114:
+# ROD-97's model mounts the whole repo root at /repo with the worktree as
+# the working directory, so the trusted path is /repo/worktrees/<id>,
+# different per instance, and can no longer be the fixed /workspace this
+# file used to hardcode.
+#
 # Skips the interactive first-run theme picker, which otherwise blocks at
 # a stdin prompt with nothing to answer it. Verified empirically with a
 # real CLAUDE_CODE_OAUTH_TOKEN: the prompt fires regardless of a valid
@@ -89,13 +96,28 @@ RUN mkdir -p /opt/claudio && cat > /opt/claudio/claude.json.template <<'JSON'
   "theme": "dark",
   "hasCompletedOnboarding": true,
   "projects": {
-    "/workspace": {
+    "__CLAUDIO_WORKDIR__": {
       "hasTrustDialogAccepted": true
     }
   }
 }
 JSON
 RUN chmod a+r /opt/claudio/claude.json.template
+
+# entrypoint.sh lives under /opt, not /home/agent (ROD-114) — found the
+# hard way: /home/agent/entrypoint.sh was the ENTRYPOINT's own target, so
+# the instant home/ is bind-mounted (even an empty, freshly-created host
+# directory — the normal case for a brand new instance), the script
+# itself disappears along with everything else baked into /home/agent.
+# tini then fails immediately with "exec ... failed: No such file or
+# directory" before the container does anything at all. Same shadowing
+# bug as the npm-global path fixed earlier in ROD-99, just for the
+# script that bug fix's own verification hadn't happened to trip over
+# (that test reused a home/ populated by an earlier run, never a truly
+# empty one). Copied as root, before USER agent below, for the same
+# reason as the template above: /opt/claudio is root-owned.
+COPY entrypoint.sh /opt/claudio/entrypoint.sh
+RUN chmod a+rx /opt/claudio/entrypoint.sh
 
 # safe.directory belt-and-braces (ROD-97): even with UID matching, a
 # worktree mounted from the host can trip git's dubious-ownership check
@@ -106,9 +128,10 @@ RUN chmod a+r /opt/claudio/claude.json.template
 USER agent
 RUN git config --global --add safe.directory '*'
 
-COPY --chown=agent:agent entrypoint.sh /home/agent/entrypoint.sh
-RUN chmod +x /home/agent/entrypoint.sh
-
-WORKDIR /workspace
-
-ENTRYPOINT ["tini", "--", "/home/agent/entrypoint.sh"]
+# No WORKDIR here (ROD-114): the real working directory is
+# /repo/worktrees/<id>, set per container via `docker run -w`
+# (internal/engine.CreateAndStart) since it differs by instance. A
+# WORKDIR baked here would only be a default for runs that omit -w, and
+# leaving it unset makes that omission fail loudly instead of silently
+# landing somewhere wrong.
+ENTRYPOINT ["tini", "--", "/opt/claudio/entrypoint.sh"]

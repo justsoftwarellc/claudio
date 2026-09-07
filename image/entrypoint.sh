@@ -15,8 +15,14 @@ SESSION=claude
 # gets the template; a home/ from a rebuilt container (ROD-99 restart)
 # keeps its real state, including whatever session history and settings
 # already accumulated there.
+#
+# The trust-dialog entry is keyed by the exact cwd string, and (ROD-114)
+# that cwd is /repo/worktrees/<id> — different per instance, not a fixed
+# /workspace — so it cannot be baked into the template at image-build
+# time. sed the real $PWD in at container start instead; the template
+# ships with a placeholder for exactly this substitution.
 if [ ! -f "$HOME/.claude.json" ] && [ -f /opt/claudio/claude.json.template ]; then
-	cp /opt/claudio/claude.json.template "$HOME/.claude.json"
+	sed "s#__CLAUDIO_WORKDIR__#$PWD#" /opt/claudio/claude.json.template > "$HOME/.claude.json"
 fi
 
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
@@ -29,7 +35,16 @@ fi
 # survives this script's own exit (tini keeps the tmux server process
 # alive as long as it has a client or a session — the container's
 # lifetime is the tmux server's lifetime here).
-tmux new-session -d -s "$SESSION" -c /workspace
+#
+# The session's cwd is wherever the container was started with -w, not a
+# hardcoded /workspace: ROD-97 mounts the whole repo root at /repo with
+# the worktree as the working directory (docs/architecture.md Appendix
+# B), so the actual path is /repo/worktrees/<id> and varies per instance.
+# Found empirically — the image's old WORKDIR /workspace no longer exists
+# at all once only /repo is mounted, and tmux new-session -c on a
+# nonexistent directory fails, taking the whole entrypoint down with it
+# under set -e.
+tmux new-session -d -s "$SESSION" -c "$PWD"
 
 # Launch Claude Code inside the session rather than as this script's own
 # exec target — see §7.2 for why (detach semantics, multi-viewer,
