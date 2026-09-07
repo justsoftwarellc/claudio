@@ -1,0 +1,4 @@
+/claudio
+*.db
+*.db-shm
+*.db-wal
