@@ -31,12 +31,21 @@ RUN if getent passwd "${USER_UID}" >/dev/null; then userdel -f "$(getent passwd 
     && groupadd -g "${USER_GID}" agent \
     && useradd -m -u "${USER_UID}" -g "${USER_GID}" -s /bin/bash agent
 
-# Claude Code CLI. Installed as the agent user's npm global so it is not
-# root-owned and does not need root to update.
-USER agent
-ENV NPM_CONFIG_PREFIX=/home/agent/.npm-global
-ENV PATH=/home/agent/.npm-global/bin:$PATH
-RUN npm install -g @anthropic-ai/claude-code
+# Claude Code CLI. Installed under /opt rather than /home/agent — ROD-99
+# needs home/ bind-mounted to /home/agent for transcripts to survive a
+# container rebuild (docs/architecture.md §5.1), and a bind mount at
+# /home/agent replaces the directory's entire prior content. Verified
+# empirically: pointing NPM_CONFIG_PREFIX at /home/agent/.npm-global (the
+# original layout) meant any mount at /home/agent — even an empty host
+# directory — shadowed the install completely, and `claude` disappeared
+# from the container with "no such file or directory". /opt/claude-code
+# sits outside every mount this image declares, so it survives regardless
+# of what home/ contains. Root owns the install (root-only write is
+# correct for a shared toolchain path); the agent user only ever reads it.
+ENV NPM_CONFIG_PREFIX=/opt/claude-code
+ENV PATH=/opt/claude-code/bin:$PATH
+RUN npm install -g @anthropic-ai/claude-code \
+    && chmod -R a+rX /opt/claude-code
 
 # Docker's ENV PATH only reaches processes Docker launches directly
 # (the entrypoint). A tmux pane's shell is an interactive/login shell
@@ -45,36 +54,37 @@ RUN npm install -g @anthropic-ai/claude-code
 # "command not found" inside the tmux pane. /etc/profile.d runs for
 # every login shell regardless of which user's dotfiles exist, so this
 # is the one place that reliably reaches the tmux pane's shell too.
-USER root
-RUN echo 'export PATH=/home/agent/.npm-global/bin:$PATH' > /etc/profile.d/claudio-npm-global.sh
-USER agent
+RUN echo 'export PATH=/opt/claude-code/bin:$PATH' > /etc/profile.d/claudio-npm-global.sh
 
-# safe.directory belt-and-braces (ROD-97): even with UID matching, a
-# worktree mounted from the host can trip git's dubious-ownership check
-# in edge cases (e.g. differing mount options). "*" is acceptable here
-# because the container's only mounted content is Claudio-managed.
-RUN git config --global --add safe.directory '*'
-
-# Pre-seed onboarding state to skip the interactive first-run theme
-# picker, which otherwise blocks at a stdin prompt with nothing to
-# answer it. Verified empirically with a real CLAUDE_CODE_OAUTH_TOKEN:
-# the prompt fires regardless of a valid credential, and is NOT gated by
-# ~/.claude/settings.json's "theme" key (that alone did not skip it).
-# The actual gate is ~/.claude.json's "hasCompletedOnboarding" and
-# "theme" fields, confirmed by inspecting a real local install where
-# onboarding was already completed. A second, distinct first-run gate
-# — the "is this a project you trust?" dialog — was found immediately
-# after fixing the theme prompt, using a REAL CLAUDE_CODE_OAUTH_TOKEN
-# (referenced by the operator's shell, never exposed in this session).
-# It is gated per-project by projects["<path>"].hasTrustDialogAccepted
-# in the same file, keyed by the exact cwd Claude Code was started in.
-# Since every Claudio container mounts the workspace at the fixed path
-# /workspace (docs/architecture.md §5.1), that one path can be
-# pre-trusted at build time — this is not a security regression for
-# Claudio specifically, because the operator (not an untrusted third
-# party) is the one who chose to mount that repo into a sandbox they
-# provisioned in the first place.
-RUN cat > /home/agent/.claude.json <<'JSON'
+# Onboarding pre-seed template — see entrypoint.sh for why this can no
+# longer be written directly to /home/agent/.claude.json at build time.
+# Once home/ is bind-mounted (ROD-99), anything baked into /home/agent in
+# this image is shadowed by whatever the host mount contains (verified:
+# same failure mode as the npm-global path above). The entrypoint copies
+# this template into place on first boot instead, i.e. only when the
+# mounted home/ doesn't already have its own .claude.json — a rebuilt
+# container reusing an existing home/ must never clobber a real session's
+# onboarding/trust state with the template again.
+#
+# Skips the interactive first-run theme picker, which otherwise blocks at
+# a stdin prompt with nothing to answer it. Verified empirically with a
+# real CLAUDE_CODE_OAUTH_TOKEN: the prompt fires regardless of a valid
+# credential, and is NOT gated by ~/.claude/settings.json's "theme" key
+# (that alone did not skip it). The actual gate is ~/.claude.json's
+# "hasCompletedOnboarding" and "theme" fields, confirmed by inspecting a
+# real local install where onboarding was already completed. A second,
+# distinct first-run gate — the "is this a project you trust?" dialog —
+# was found immediately after fixing the theme prompt, using a REAL
+# CLAUDE_CODE_OAUTH_TOKEN (referenced by the operator's shell, never
+# exposed in this session). It is gated per-project by
+# projects["<path>"].hasTrustDialogAccepted in the same file, keyed by
+# the exact cwd Claude Code was started in. Since every Claudio container
+# mounts the workspace at the fixed path /workspace (docs/architecture.md
+# §5.1), that one path can be pre-trusted in the template — this is not a
+# security regression for Claudio specifically, because the operator (not
+# an untrusted third party) is the one who chose to mount that repo into
+# a sandbox they provisioned in the first place.
+RUN mkdir -p /opt/claudio && cat > /opt/claudio/claude.json.template <<'JSON'
 {
   "theme": "dark",
   "hasCompletedOnboarding": true,
@@ -85,6 +95,16 @@ RUN cat > /home/agent/.claude.json <<'JSON'
   }
 }
 JSON
+RUN chmod a+r /opt/claudio/claude.json.template
+
+# safe.directory belt-and-braces (ROD-97): even with UID matching, a
+# worktree mounted from the host can trip git's dubious-ownership check
+# in edge cases (e.g. differing mount options). "*" is acceptable here
+# because the container's only mounted content is Claudio-managed. Must
+# run as agent — a global gitconfig written by root would not be the
+# config git reads once the container runs as agent.
+USER agent
+RUN git config --global --add safe.directory '*'
 
 COPY --chown=agent:agent entrypoint.sh /home/agent/entrypoint.sh
 RUN chmod +x /home/agent/entrypoint.sh

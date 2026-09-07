@@ -9,6 +9,16 @@ set -euo pipefail
 
 SESSION=claude
 
+# Apply the onboarding pre-seed only if this home/ doesn't already have
+# its own .claude.json — see Dockerfile for why this moved out of the
+# image build. A fresh home/ (first `claudio create` for this instance)
+# gets the template; a home/ from a rebuilt container (ROD-99 restart)
+# keeps its real state, including whatever session history and settings
+# already accumulated there.
+if [ ! -f "$HOME/.claude.json" ] && [ -f /opt/claudio/claude.json.template ]; then
+	cp /opt/claudio/claude.json.template "$HOME/.claude.json"
+fi
+
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
 	echo "entrypoint: no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY set." >&2
 	echo "entrypoint: the container has no credential to run Claude Code. See ROD-96." >&2
