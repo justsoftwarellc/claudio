@@ -82,11 +82,6 @@ func (l *Local) GetInstance(ctx context.Context, idOrName string) (store.Instanc
 }
 
 func (l *Local) Destroy(ctx context.Context, params core.DestroyParams) error {
-	workspaceRoot, err := expandHome(l.global.WorkspaceRoot)
-	if err != nil {
-		return err
-	}
-	params.WorkspaceRoot = workspaceRoot
 	params.DockerHost = l.global.Runtime.DockerHost
 	return core.DestroyInstance(ctx, l.store, params)
 }

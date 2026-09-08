@@ -25,8 +25,7 @@ func TestDestroyInstanceRemovesContainerWorktreeAndRow(t *testing.T) {
 	}
 
 	err = DestroyInstance(context.Background(), s, DestroyParams{
-		IDOrName:      result.InstanceID,
-		WorkspaceRoot: workspaceRoot,
+		IDOrName: result.InstanceID,
 	})
 	if err != nil {
 		t.Fatalf("DestroyInstance: %v", err)
@@ -56,7 +55,6 @@ func TestDestroyInstanceKeepWorkspace(t *testing.T) {
 
 	err = DestroyInstance(context.Background(), s, DestroyParams{
 		IDOrName:      result.InstanceID,
-		WorkspaceRoot: workspaceRoot,
 		KeepWorkspace: true,
 	})
 	if err != nil {
@@ -71,7 +69,7 @@ func TestDestroyInstanceKeepWorkspace(t *testing.T) {
 func TestDestroyInstanceUnknownIDErrors(t *testing.T) {
 	s := openTestStore(t)
 
-	err := DestroyInstance(context.Background(), s, DestroyParams{IDOrName: "does-not-exist", WorkspaceRoot: t.TempDir()})
+	err := DestroyInstance(context.Background(), s, DestroyParams{IDOrName: "does-not-exist"})
 	if err == nil {
 		t.Fatal("expected error destroying a nonexistent instance")
 	}
@@ -101,8 +99,7 @@ func TestDestroyInstanceIsRetryableAfterContainerAlreadyGone(t *testing.T) {
 	}
 
 	err = DestroyInstance(context.Background(), s, DestroyParams{
-		IDOrName:      result.InstanceID,
-		WorkspaceRoot: workspaceRoot,
+		IDOrName: result.InstanceID,
 	})
 	if err != nil {
 		t.Fatalf("DestroyInstance after out-of-band removal: %v", err)

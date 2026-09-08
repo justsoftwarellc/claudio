@@ -17,12 +17,13 @@ type DestroyStore interface {
 }
 
 // DestroyParams bundles what DestroyInstance needs beyond the instance
-// ID: the repo Root to remove the worktree from (WorkspaceRoot resolves
-// it the same way CreateInstance did) and whether to keep the worktree
-// on disk.
+// ID: whether to keep the worktree on disk, and which Docker daemon to
+// remove the container on. The repo Root itself is reconstructed from
+// the stored instance row's RepoRoot (repo.RootFromPath), not derived
+// from a workspace root here — see RootFromPath's doc for why that
+// matters for a greenfield instance.
 type DestroyParams struct {
 	IDOrName      string
-	WorkspaceRoot string
 	KeepWorkspace bool // docs/architecture.md: `destroy --keep-workspace` leaves the worktree on disk
 	DockerHost    string
 }
@@ -51,10 +52,13 @@ func DestroyInstance(ctx context.Context, st DestroyStore, params DestroyParams)
 	}
 
 	if !params.KeepWorkspace && inst.RepoRoot != "" {
-		root, err := repo.EnsureRoot(ctx, params.WorkspaceRoot, inst.RepoURL)
-		if err != nil {
-			return fmt.Errorf("core: destroy %s: resolve repo root: %w", inst.ID, err)
-		}
+		// RootFromPath, not EnsureRoot: the root already exists (this
+		// instance was created from it) and its path is already known
+		// from the stored row, so there's nothing to clone-or-init.
+		// EnsureRoot would instead try to treat inst.RepoURL as a
+		// clonable remote, which breaks for a greenfield instance's
+		// synthetic "local:<name>" RepoURL (see RootFromPath's doc).
+		root := repo.RootFromPath(inst.RepoRoot)
 		if err := repo.RemoveWorktree(ctx, root, inst.ID); err != nil {
 			return fmt.Errorf("core: destroy %s: remove worktree: %w", inst.ID, err)
 		}

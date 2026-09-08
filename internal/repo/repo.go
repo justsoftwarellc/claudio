@@ -39,6 +39,24 @@ func rootPaths(workspaceRoot, slug string) Root {
 	}
 }
 
+// RootFromPath reconstructs Root from a root path already known to
+// exist — store.Instance.RepoRoot, persisted at create time — without
+// going through EnsureRoot/InitRoot's clone-or-init logic. Callers that
+// already have a live instance row (e.g. DestroyInstance) should always
+// use this instead of re-deriving the root from RepoURL: EnsureRoot
+// assumes RepoURL is a real, clonable remote, which is false for a
+// greenfield instance's synthetic "local:<name>" RepoURL — verified
+// empirically, `claudio destroy` on a --new instance tried to `git
+// clone local:market-research` and failed with a DNS resolution error
+// for host "local".
+func RootFromPath(rootPath string) Root {
+	return Root{
+		Path:      rootPath,
+		MainClone: filepath.Join(rootPath, "main-clone"),
+		Worktrees: filepath.Join(rootPath, "worktrees"),
+	}
+}
+
 // Slug derives the on-disk root directory name from a repo URL, e.g.
 // "git@github.com:acme/web.git" -> "github.com-acme-web". Deterministic so
 // a second `create` against the same repo finds the same root rather than

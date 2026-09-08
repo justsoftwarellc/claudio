@@ -59,6 +59,41 @@ func TestCreateInstanceGreenfield(t *testing.T) {
 	}
 }
 
+// TestDestroyInstanceGreenfield verifies the fix alongside --new: a
+// greenfield instance's RepoURL is the synthetic "local:<name>", not a
+// real clonable remote, and destroy must not try to git-clone it —
+// found empirically (a real `claudio destroy` on a --new instance tried
+// to `git clone local:market-research` and failed with a DNS resolution
+// error for host "local") when DestroyInstance re-derived the repo Root
+// via EnsureRoot(RepoURL) instead of reconstructing it directly from
+// the stored RepoRoot path (repo.RootFromPath).
+func TestDestroyInstanceGreenfield(t *testing.T) {
+	dockerAvailable(t)
+	s := openTestStore(t)
+
+	params := CreateParams{
+		GreenfieldName: "market-research",
+		WorkspaceRoot:  t.TempDir(),
+		Image:          "alpine",
+		Env:            map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "test-token"},
+		PortRangeLow:   43000,
+		PortRangeHigh:  43999,
+	}
+	result, err := createForTest(t, s, params)
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+
+	err = DestroyInstance(t.Context(), s, DestroyParams{IDOrName: result.InstanceID})
+	if err != nil {
+		t.Fatalf("DestroyInstance: %v", err)
+	}
+
+	if _, err := os.Stat(result.WorktreeDir); !os.IsNotExist(err) {
+		t.Errorf("worktree dir %s should be gone after destroy, stat err = %v", result.WorktreeDir, err)
+	}
+}
+
 func TestCreateInstanceGreenfieldTwiceWithSameNameErrors(t *testing.T) {
 	dockerAvailable(t)
 	s := openTestStore(t)
