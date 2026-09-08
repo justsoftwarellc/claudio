@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -11,23 +12,30 @@ import (
 	"github.com/rodrigomorales/claudio/internal/store"
 )
 
-// cmdLs implements `claudio ls [--all]`. Phase 1 has no attention/activity
-// monitor yet (that's ROD-102, which needs hooks + the daemon), so the
-// ATTENTION column is omitted for now rather than faked — see the
-// project's stance on flagging assumptions instead of asserting them
-// (docs/architecture.md, "to verify during implementation" notes).
+// cmdLs implements `claudio ls [--all] [--json]`. Phase 1 has no
+// attention/activity monitor yet (that's ROD-102, which needs hooks +
+// the daemon), so the ATTENTION column is omitted for now rather than
+// faked — see the project's stance on flagging assumptions instead of
+// asserting them (docs/architecture.md, "to verify during
+// implementation" notes).
 //
 // Stopped instances are hidden unless --all, mirroring `docker ps` /
 // `docker ps -a` — the mental model users already have for exactly this
 // question. Destroyed instances never appear either way: `destroy`
 // deletes the row outright (store.DeleteInstance), so there is nothing
-// left to list.
+// left to list. --json applies the same --all filtering as the human
+// table — it is a format switch, not a second query — so a script
+// piping `claudio ls --json` sees exactly what a human running `claudio
+// ls` would, structured instead of tabular.
 func cmdLs(ctx context.Context, args []string) int {
 	showAll := false
+	asJSON := false
 	for _, arg := range args {
 		switch arg {
 		case "--all":
 			showAll = true
+		case "--json":
+			asJSON = true
 		default:
 			fmt.Fprintf(os.Stderr, "claudio ls: unknown flag %q\n", arg)
 			return 1
@@ -60,6 +68,40 @@ func cmdLs(ctx context.Context, args []string) int {
 		instances = visible
 	}
 
+	if asJSON {
+		return printLsJSON(instances, untracked)
+	}
+	return printLsTable(instances, untracked, hidden)
+}
+
+// lsJSON is `claudio ls --json`'s exact wire shape — a caller scripting
+// against this depends on these two field names, so they're fixed here
+// rather than left to whatever encoding/json would default to for an
+// anonymous struct at each call site. Both fields are always present
+// (never omitted, even when empty) so a script doesn't need an extra
+// nil-check for "no instances" versus "the key isn't there at all."
+type lsJSON struct {
+	Instances []core.InstanceView       `json:"instances"`
+	Untracked []core.UntrackedContainer `json:"untracked"`
+}
+
+func printLsJSON(instances []core.InstanceView, untracked []core.UntrackedContainer) int {
+	if instances == nil {
+		instances = []core.InstanceView{}
+	}
+	if untracked == nil {
+		untracked = []core.UntrackedContainer{}
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(lsJSON{Instances: instances, Untracked: untracked}); err != nil {
+		fmt.Fprintln(os.Stderr, "claudio ls:", err)
+		return 1
+	}
+	return 0
+}
+
+func printLsTable(instances []core.InstanceView, untracked []core.UntrackedContainer, hidden int) int {
 	if len(instances) == 0 && len(untracked) == 0 {
 		if hidden > 0 {
 			fmt.Printf("No running instances (%d stopped — see `claudio ls --all`).\n", hidden)
@@ -111,13 +153,18 @@ func displayName(inst core.InstanceView) string {
 // Docker's live state over the store's desired_state — see
 // docs/architecture.md §10.1 — and surfacing an OOM kill explicitly
 // rather than a bare "stopped" (ROD-112: an unexplained stop is a worse
-// failure mode than an explained one).
+// failure mode than an explained one). Colored per docs/architecture.md
+// §9's "Respect NO_COLOR and non-TTY stdout" — an OOM kill is a failure
+// worth a human's eye (red); an inert stopped instance can recede
+// (faint). colorize itself no-ops under NO_COLOR or a non-TTY stdout.
 func statusOf(inst core.InstanceView) string {
 	switch {
 	case inst.OOMKilled:
-		return "stopped (out of memory)"
+		return colorize(ansiRed, "stopped (out of memory)")
 	case inst.ContainerStatus != "":
 		return inst.ContainerStatus
+	case inst.DesiredState == store.StateStopped:
+		return colorize(ansiFaint, string(inst.DesiredState))
 	default:
 		return string(inst.DesiredState)
 	}

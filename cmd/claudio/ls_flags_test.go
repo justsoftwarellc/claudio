@@ -16,14 +16,11 @@ func TestLsRejectsUnknownFlag(t *testing.T) {
 	}
 }
 
-func TestLsRejectsUnimplementedJSONFlag(t *testing.T) {
-	// --json is advertised in `claudio help` but not implemented. Until it
-	// is, it must fail loudly: silently printing a human table with exit 0
-	// hands a script parsing JSON garbage plus a success code.
+func TestLsAcceptsJSONFlag(t *testing.T) {
 	t.Setenv("CLAUDIO_HOME", t.TempDir())
 
-	if code := run([]string{"ls", "--json"}); code == 0 {
-		t.Error("claudio ls --json exited 0, want nonzero while --json is unimplemented")
+	if code := run([]string{"ls", "--json"}); code != 0 {
+		t.Errorf("claudio ls --json exited %d, want 0", code)
 	}
 }
 
