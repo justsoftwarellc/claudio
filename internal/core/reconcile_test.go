@@ -158,6 +158,53 @@ func TestReconcileFlagsUntrackedContainer(t *testing.T) {
 	}
 }
 
+// TestApplyMarkStoppedEmitsEvent pins ApplyMarkStopped to the same event
+// the inline corrections in ListInstances/GetInstanceView emit, so the
+// event log doesn't depend on which mark-stopped path a caller took.
+func TestApplyMarkStoppedEmitsEvent(t *testing.T) {
+	s := openTestStore(t)
+	createInstance(t, s, "inst-1", store.StepHealthy)
+
+	if err := ApplyMarkStopped(context.Background(), s, "inst-1"); err != nil {
+		t.Fatalf("ApplyMarkStopped: %v", err)
+	}
+
+	events, err := s.ListEvents(context.Background(), "inst-1")
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+	if events[0].Kind != store.EventReconciled {
+		t.Errorf("Kind = %q, want %q", events[0].Kind, store.EventReconciled)
+	}
+}
+
+// TestApplyMarkStoppedEmitsNoEventOnFailedTransition pairs with the
+// above: the event records that a correction happened, so a rejected
+// transition (destroyed is terminal) must leave the log untouched
+// rather than claiming a stop that never occurred.
+func TestApplyMarkStoppedEmitsNoEventOnFailedTransition(t *testing.T) {
+	s := openTestStore(t)
+	createInstance(t, s, "inst-1", store.StepHealthy)
+	if err := s.TransitionDesiredState(context.Background(), "inst-1", store.StateDestroyed); err != nil {
+		t.Fatalf("TransitionDesiredState to destroyed: %v", err)
+	}
+
+	if err := ApplyMarkStopped(context.Background(), s, "inst-1"); err == nil {
+		t.Fatal("expected an error marking a destroyed instance stopped (destroyed is terminal)")
+	}
+
+	events, err := s.ListEvents(context.Background(), "inst-1")
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want none when the transition was rejected", events)
+	}
+}
+
 func trimNewline(s string) string {
 	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
 		s = s[:len(s)-1]

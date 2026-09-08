@@ -13,6 +13,7 @@ type StatusStore interface {
 	GetInstance(ctx context.Context, idOrName string) (store.Instance, error)
 	PortMappings(ctx context.Context, instanceID string) ([]store.PortMapping, error)
 	TransitionDesiredState(ctx context.Context, instanceID string, to store.DesiredState) error
+	RecordEvent(ctx context.Context, instanceID string, kind store.EventKind, message string) error
 }
 
 // GetInstanceView resolves one instance (by ID, name, or the store's own
@@ -68,6 +69,7 @@ func GetInstanceView(ctx context.Context, st StatusStore, dockerHost, idOrName s
 	if !foundContainer && inst.DesiredState == store.StateRunning && inst.ProvisionStep == store.StepHealthy {
 		if err := st.TransitionDesiredState(ctx, inst.ID, store.StateStopped); err == nil {
 			view.DesiredState = store.StateStopped
+			recordMarkStopped(ctx, st, inst.ID)
 		}
 	}
 

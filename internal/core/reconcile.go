@@ -124,6 +124,16 @@ func Reconcile(ctx context.Context, st InstanceStore, dockerHost string) ([]Reco
 // call rather than folded into Reconcile itself so a caller can inspect
 // every action (e.g. for a `claudio status` printout) before anything
 // mutates the store.
+//
+// Emits the same event as the inline correction in ListInstances and
+// GetInstanceView: this is the path a future caller walking Reconcile's
+// actions would use (ROD-101's daemon, most likely), and a mark-stopped
+// that leaves no trace in one path but not the others would make the
+// event log's completeness depend on which entry point happened to run.
 func ApplyMarkStopped(ctx context.Context, st *store.Store, instanceID string) error {
-	return st.TransitionDesiredState(ctx, instanceID, store.StateStopped)
+	if err := st.TransitionDesiredState(ctx, instanceID, store.StateStopped); err != nil {
+		return err
+	}
+	recordMarkStopped(ctx, st, instanceID)
+	return nil
 }

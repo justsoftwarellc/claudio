@@ -18,6 +18,7 @@ type InstanceStore interface {
 	ListInstances(ctx context.Context) ([]store.Instance, error)
 	PortMappings(ctx context.Context, instanceID string) ([]store.PortMapping, error)
 	TransitionDesiredState(ctx context.Context, instanceID string, to store.DesiredState) error
+	RecordEvent(ctx context.Context, instanceID string, kind store.EventKind, message string) error
 }
 
 // ListInstances merges the store's intent with Docker's observed reality
@@ -93,6 +94,7 @@ func ListInstances(ctx context.Context, st InstanceStore, dockerHost string) ([]
 			// store's own bookkeeping falls further behind.
 			if err := st.TransitionDesiredState(ctx, inst.ID, store.StateStopped); err == nil {
 				view.DesiredState = store.StateStopped
+				recordMarkStopped(ctx, st, inst.ID)
 			}
 		}
 		views = append(views, view)
@@ -118,6 +120,25 @@ func ListInstances(ctx context.Context, st InstanceStore, dockerHost string) ([]
 	}
 
 	return views, untracked, nil
+}
+
+// eventRecorder is the sliver of InstanceStore and StatusStore that
+// recordMarkStopped needs, so both call sites share one emitter rather
+// than one interface widening to cover the other's methods.
+type eventRecorder interface {
+	RecordEvent(ctx context.Context, instanceID string, kind store.EventKind, message string) error
+}
+
+// recordMarkStopped logs the lazy reconciler's mark-stopped correction to
+// the event log (docs/architecture.md §10.1), so a user who later asks
+// why their instance is stopped can see that Claudio noticed the
+// container was gone rather than someone having stopped it. The error is
+// deliberately dropped for the same reason the transition's is: this
+// runs on read paths (`claudio ls`, `claudio status`), and a lost log
+// line must not turn a correct listing into a failed command.
+func recordMarkStopped(ctx context.Context, st eventRecorder, instanceID string) {
+	_ = st.RecordEvent(ctx, instanceID, store.EventReconciled,
+		"container no longer exists; marked stopped")
 }
 
 // parseLabelTimestamp parses the claudio.created_at label, which engine
