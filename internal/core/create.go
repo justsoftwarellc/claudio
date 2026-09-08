@@ -56,6 +56,16 @@ type CreateParams struct {
 	PortRangeHigh  int
 	DockerHost     string
 
+	// PublishAllInterfaces is `claudio create --publish-all-interfaces`
+	// (docs/architecture.md §6.2): publish this instance's ports on every
+	// interface instead of the 127.0.0.1 default. Passed straight through
+	// to engine.CreateSpec — allocation is unaffected, only which address
+	// Docker binds the already-allocated host port on. Note the bind()
+	// probe in store.AllocatePort still probes 127.0.0.1 regardless, which
+	// is the stricter of the two checks: a port bindable on all interfaces
+	// is necessarily bindable on loopback.
+	PublishAllInterfaces bool
+
 	// CleanOnFail reverses the default in docs/architecture.md §4.1/
 	// ROD-99 ("FAILED preserves the workspace for inspection unless
 	// --clean-on-fail"): when true, a failure during provisioning removes
@@ -272,7 +282,10 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		HomeDir:     homeDir,
 		Ports:       toBindings(ports),
 		Resources:   params.Resources,
-		Env:         params.Env,
+
+		PublishAllInterfaces: params.PublishAllInterfaces,
+
+		Env: params.Env,
 	})
 	if err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
@@ -367,7 +380,7 @@ func allocatePorts(ctx context.Context, st CreateStore, id, worktreeDir string, 
 		}
 		hostPort, err := st.AllocatePort(ctx, id, r.Container, r.ServiceName, r.Source, r.DetectedFrom, params.PortRangeLow, params.PortRangeHigh)
 		if err != nil {
-			return nil, fmt.Errorf("allocate port for %s (container %d): %w", r.ServiceName, r.Container, err)
+			return nil, fmt.Errorf("allocate port for %s (container %d): %w", r.ServiceName, r.Container, describePortRangeExhausted(err, params.PortRangeLow, params.PortRangeHigh))
 		}
 		out = append(out, resolvedPort{Resolved: r, HostPort: hostPort})
 	}

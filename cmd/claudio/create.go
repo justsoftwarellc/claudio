@@ -17,19 +17,19 @@ import (
 )
 
 // cmdCreate implements `claudio create <repo> [--branch B | --new-branch
-// B] [--name N] [--ports c:h,...] [--env-file F] [--clean-on-fail]
-// [--yes]`, plus the greenfield `claudio create --new <name>` path (no
+// B] [--name N] [--ports c,...] [--publish-all-interfaces] [--env-file F]
+// [--clean-on-fail] [--yes]`, plus the greenfield `claudio create --new <name>` path (no
 // upstream repo — docs/architecture.md §5.1). See §5.1/§9 and ROD-100.
 // The credential comes from credentialEnv (see env.go).
 func cmdCreate(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo> [--branch B | --new-branch B] [--name N] [--ports container:host,...] [--env-file F] [--clean-on-fail] [--yes]")
-		fmt.Fprintln(os.Stderr, "   or: claudio create --new <name> [--new-branch B] [--name N] [--ports container:host,...] [--env-file F] [--clean-on-fail]")
+		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo> [--branch B | --new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--env-file F] [--clean-on-fail] [--yes]")
+		fmt.Fprintln(os.Stderr, "   or: claudio create --new <name> [--new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--env-file F] [--clean-on-fail]")
 		return 1
 	}
 
 	var repoURL, greenfieldName, branch, newBranch, name, portsFlag, envFile string
-	var cleanOnFail, assumeYes bool
+	var cleanOnFail, assumeYes, publishAllInterfaces bool
 
 	firstArg := args[0]
 	startFlags := 1
@@ -81,6 +81,8 @@ func cmdCreate(ctx context.Context, args []string) int {
 				return 1
 			}
 			envFile = args[i]
+		case "--publish-all-interfaces":
+			publishAllInterfaces = true
 		case "--clean-on-fail":
 			cleanOnFail = true
 		case "--yes":
@@ -133,6 +135,8 @@ func cmdCreate(ctx context.Context, args []string) int {
 		Env:            env,
 		EnvFile:        envFile,
 		CleanOnFail:    cleanOnFail,
+
+		PublishAllInterfaces: publishAllInterfaces,
 	}
 
 	result, err := c.Create(ctx, params)
@@ -217,13 +221,18 @@ func isInteractive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
-// parseManualPorts parses --ports container:host,container:host into
-// portdetect.Manual entries. The host side is informational only right
-// now — store.AllocatePort is the actual authority on which host port an
-// instance gets (see portdetect.Manual's doc) — so a supplied host value
-// is validated but not threaded through; a future iteration may let
-// --ports pin an exact host port once AllocatePort supports a preferred
-// value.
+// parseManualPorts parses --ports into portdetect.Manual entries.
+//
+// Only the bare `container` form is accepted. The `container:host` form
+// is rejected rather than honored: host ports are allocated first-free-
+// in-range and verified with a real bind() probe (store.AllocatePort,
+// docs/architecture.md §6.2), which is the whole mechanism that lets a
+// second instance of the same repo exist at all. Letting a flag pin an
+// exact host port would reintroduce exactly the static-mapping collision
+// that allocator was built to eliminate, and `UNIQUE(host_port)` would
+// surface it as an opaque insert failure on whichever `claudio create`
+// lost the race. Accepting the syntax and silently ignoring the value —
+// what this did before — is worse still: it reads as a pin that works.
 func parseManualPorts(flag string) ([]portdetect.Manual, error) {
 	if flag == "" {
 		return nil, nil
@@ -234,15 +243,13 @@ func parseManualPorts(flag string) ([]portdetect.Manual, error) {
 		if entry == "" {
 			continue
 		}
-		parts := strings.SplitN(entry, ":", 2)
-		containerPort, err := strconv.Atoi(parts[0])
+		if strings.Contains(entry, ":") {
+			container := strings.SplitN(entry, ":", 2)[0]
+			return nil, fmt.Errorf("invalid --ports entry %q: only the container port is supported (use %q) — Claudio picks the host port itself, from ports.range, so that two instances of the same repo can run at once", entry, container)
+		}
+		containerPort, err := strconv.Atoi(entry)
 		if err != nil {
 			return nil, fmt.Errorf("invalid --ports entry %q: container port must be a number", entry)
-		}
-		if len(parts) == 2 {
-			if _, err := strconv.Atoi(parts[1]); err != nil {
-				return nil, fmt.Errorf("invalid --ports entry %q: host port must be a number", entry)
-			}
 		}
 		out = append(out, portdetect.Manual{Container: containerPort})
 	}

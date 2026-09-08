@@ -2,10 +2,30 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/rodrigomorales/claudio/internal/store"
 )
+
+// describePortRangeExhausted replaces a bare store.ErrPortRangeExhausted
+// with one that names the range that was actually exhausted and where to
+// widen it — docs/architecture.md §6.2: "Exhausted range is a clear error
+// naming the range and how to widen it, not a cryptic bind failure."
+// Rendered here rather than in store.AllocatePort because the range is
+// the caller's parameter, not the store's: the store is handed a low/high
+// pair and has no idea it came from ports.range in the global config
+// (§12.3's three-layer resolution puts that knowledge above the store).
+//
+// The original error is wrapped, not discarded, so errors.Is still
+// identifies it as ErrPortRangeExhausted for any caller matching on the
+// sentinel rather than on the message.
+func describePortRangeExhausted(err error, rangeLow, rangeHigh int) error {
+	if !errors.Is(err, store.ErrPortRangeExhausted) {
+		return err
+	}
+	return fmt.Errorf("%w: every host port in %d-%d is taken — widen ports.range in ~/.claudio/config.yml, or free ports by destroying instances you no longer need (`claudio ls`)", err, rangeLow, rangeHigh)
+}
 
 // PortsStore is the subset of *store.Store AddPort/RemovePort need.
 type PortsStore interface {
@@ -31,7 +51,7 @@ func AddPort(ctx context.Context, st PortsStore, idOrName string, containerPort 
 	}
 	hostPort, err = st.AllocatePort(ctx, inst.ID, containerPort, fmt.Sprintf("manual-%d", containerPort), store.PortManual, nil, rangeLow, rangeHigh)
 	if err != nil {
-		return 0, fmt.Errorf("core: ports %s --add %d: %w", inst.ID, containerPort, err)
+		return 0, fmt.Errorf("core: ports %s --add %d: %w", inst.ID, containerPort, describePortRangeExhausted(err, rangeLow, rangeHigh))
 	}
 	return hostPort, nil
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -117,4 +118,23 @@ func TestAllocatePortRangeExhausted(t *testing.T) {
 
 func idFor(i int) string {
 	return "inst-" + string(rune('a'+i))
+}
+
+// TestAllocatePortRangeExhaustedIsMatchableWithErrorsIs pins the contract
+// core.describePortRangeExhausted depends on: the exhausted-range failure
+// must be identifiable via errors.Is, not by string matching or by
+// pointer equality on the sentinel, so the layer that knows *which* range
+// was configured can wrap it with that detail without breaking detection.
+func TestAllocatePortRangeExhaustedIsMatchableWithErrorsIs(t *testing.T) {
+	s := openTest(t)
+	insertInstance(t, s, "a")
+	insertInstance(t, s, "b")
+
+	if _, err := s.AllocatePort(context.Background(), "a", 3000, "web", PortDetected, nil, 43000, 43000); err != nil {
+		t.Fatalf("first allocation: %v", err)
+	}
+	_, err := s.AllocatePort(context.Background(), "b", 3000, "web", PortDetected, nil, 43000, 43000)
+	if !errors.Is(err, ErrPortRangeExhausted) {
+		t.Fatalf("errors.Is(%v, ErrPortRangeExhausted) = false, want true", err)
+	}
 }

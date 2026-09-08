@@ -63,9 +63,10 @@ func printUsage() {
 	fmt.Println(`claudio — sandboxed Claude Code session orchestrator
 
 Usage:
-  claudio create <repo> [--branch B | --new-branch B] [--name N] [--ports c:h,...] [--clean-on-fail]
+  claudio create <repo> [--branch B | --new-branch B] [--name N] [--ports c,...]
+                        [--publish-all-interfaces] [--clean-on-fail]
                                    provision a new sandboxed session
-  claudio ls [--all] [--json]     list instances (phase 1: sorted by creation time)
+  claudio ls [--all]              list instances (--all includes stopped ones)
   claudio attach <id>             attach to an instance's Claude Code session
   claudio cd <id>                 print an instance's workspace path
   claudio status <id>             show one instance's detail view

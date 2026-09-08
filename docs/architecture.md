@@ -317,6 +317,8 @@ Detection is a *ranked guess*; every mapping records its `source` so `claudio po
 
 The `--ports` flag on `create` **supplements** detection rather than replacing it, and wins on conflict (recorded as `source: manual`). Wholesale override would force re-declaring every port just to add one; supplementing matches the actual case — "the detected ports are right, I also want the debugger exposed."
 
+`--ports` names **container ports only** (`--ports 9229`, not `9229:9229`). The host side is never the caller's to choose: §6.2's first-free-in-range allocation is what allows a second instance of the same repo to exist at all, so pinning a host port would reintroduce precisely the collision that design eliminates. The `container:host` form is rejected with an error naming the bare form, rather than accepted-and-ignored — a syntax that reads as a pin but silently does nothing is worse than one that refuses.
+
 ### 6.2 Host port allocation
 
 Static mapping (container 3000 → host 3000) breaks the moment a second instance exists. Instead:
@@ -627,7 +629,8 @@ The daemon talks to a Docker endpoint via `DOCKER_HOST`. Nothing in the design a
 ## 11. CLI surface
 
 ```
-claudio create <repo> [--branch B | --new-branch B] [--name N] [--env-file F] [--ports c:h,...]
+claudio create <repo> [--branch B | --new-branch B] [--name N] [--env-file F] [--ports c,...]
+                      [--publish-all-interfaces] [--clean-on-fail] [--yes]
 claudio ls [--all] [--json]
 claudio attach <id>
 claudio status <id>

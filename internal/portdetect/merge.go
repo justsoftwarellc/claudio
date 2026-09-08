@@ -7,10 +7,11 @@ import (
 	"github.com/rodrigomorales/claudio/internal/store"
 )
 
-// Manual is one entry from `--ports` on the CLI, e.g. --ports 9229:9229
-// parses to Manual{Container: 9229} (the host side is assigned later by
-// store.AllocatePort — this package only resolves which container ports
-// are mapped and why, never host ports).
+// Manual is one entry from `--ports` on the CLI, e.g. --ports 9229
+// parses to Manual{Container: 9229}. There is deliberately no host-port
+// field: host ports are assigned by store.AllocatePort, first-free-in-
+// range, and the CLI rejects a `container:host` argument outright rather
+// than accepting one it would ignore (see cmd/claudio.parseManualPorts).
 type Manual struct {
 	ServiceName string // defaults to "manual-<container>" if empty
 	Container   int

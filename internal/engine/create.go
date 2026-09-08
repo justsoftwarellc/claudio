@@ -71,6 +71,14 @@ type CreateSpec struct {
 	Ports     []PortBinding
 	Resources ResourceLimits
 
+	// PublishAllInterfaces binds published ports to 0.0.0.0 instead of
+	// the default 127.0.0.1 — `claudio create --publish-all-interfaces`
+	// (docs/architecture.md §6.2). Off by default and deliberately opt-in
+	// per instance: a sandboxed agent's dev server on 0.0.0.0 is reachable
+	// by anything on the local network, which §7.4 treats as a sandbox
+	// hole rather than a convenience.
+	PublishAllInterfaces bool
+
 	// Env is passed through verbatim — the caller decides what credential
 	// to inject (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, per §8.1);
 	// this package does not know how credentials are obtained (that's
@@ -78,11 +86,15 @@ type CreateSpec struct {
 	Env map[string]string
 }
 
-const bindIP = "127.0.0.1" // never 0.0.0.0 by default — docs/architecture.md §6.2/§7.4
+const (
+	bindIPLoopback = "127.0.0.1" // never 0.0.0.0 by default — docs/architecture.md §6.2/§7.4
+	bindIPAll      = "0.0.0.0"   // only via CreateSpec.PublishAllInterfaces
+)
 
 // CreateAndStart creates and starts a container for one Claudio instance,
 // mounting the repo root and home directory, publishing the given ports
-// on 127.0.0.1 only, applying resource limits, and stamping the three
+// on 127.0.0.1 (or every interface, if spec.PublishAllInterfaces is set),
+// applying resource limits, and stamping the three
 // claudio.* labels that make the container recoverable from Docker alone
 // if state.db is lost (docs/architecture.md §10.1, ROD-99's adopt).
 //
@@ -102,7 +114,7 @@ func CreateAndStart(ctx context.Context, host string, spec CreateSpec) (containe
 		return "", err
 	}
 
-	portBindings, exposedPorts, err := toDockerPorts(spec.Ports)
+	portBindings, exposedPorts, err := toDockerPorts(spec.Ports, spec.PublishAllInterfaces)
 	if err != nil {
 		return "", err
 	}
@@ -202,7 +214,11 @@ func NanoCPUs(cpus int) int64 {
 	return int64(cpus) * 1_000_000_000
 }
 
-func toDockerPorts(bindings []PortBinding) (nat.PortMap, nat.PortSet, error) {
+func toDockerPorts(bindings []PortBinding, publishAllInterfaces bool) (nat.PortMap, nat.PortSet, error) {
+	bindIP := bindIPLoopback
+	if publishAllInterfaces {
+		bindIP = bindIPAll
+	}
 	portMap := make(nat.PortMap, len(bindings))
 	portSet := make(nat.PortSet, len(bindings))
 	for _, b := range bindings {

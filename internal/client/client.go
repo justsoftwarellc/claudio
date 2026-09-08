@@ -30,6 +30,9 @@ type Client interface {
 
 	// Create provisions a new instance end to end: repo root + worktree,
 	// port detection/allocation, container creation (ROD-97/98/99/114).
+	// params.PublishAllInterfaces carries `--publish-all-interfaces`
+	// through unchanged; everything else about port handling is resolved
+	// from global config on the far side (see local.Client).
 	Create(ctx context.Context, params core.CreateParams) (core.CreateResult, error)
 
 	// GetInstance resolves an ID, alias, or unambiguous ID prefix to the
