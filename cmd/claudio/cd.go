@@ -20,14 +20,14 @@ func cmdCd(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio cd:", err)
+		fmt.Fprintln(os.Stderr, "claudio cd:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
 
 	inst, err := c.GetInstance(ctx, args[0])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio cd:", err)
+		fmt.Fprintln(os.Stderr, "claudio cd:", describeErr(err))
 		return 1
 	}
 

@@ -23,14 +23,14 @@ func cmdStart(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio start:", err)
+		fmt.Fprintln(os.Stderr, "claudio start:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
 
 	result, err := c.Start(ctx, idOrName, fresh, env, terminalProgress())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio start:", err)
+		fmt.Fprintln(os.Stderr, "claudio start:", describeErr(err))
 		return 1
 	}
 

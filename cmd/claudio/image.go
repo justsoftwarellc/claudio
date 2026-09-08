@@ -52,7 +52,7 @@ func cmdImageBuild(ctx context.Context, args []string) int {
 	if repoPath != "" {
 		abs, err := filepath.Abs(repoPath)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "claudio image build:", err)
+			fmt.Fprintln(os.Stderr, "claudio image build:", describeErr(err))
 			return 1
 		}
 		repoPath = abs
@@ -65,7 +65,7 @@ func cmdImageBuild(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio image build:", err)
+		fmt.Fprintln(os.Stderr, "claudio image build:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
@@ -79,7 +79,7 @@ func cmdImageBuild(ctx context.Context, args []string) int {
 		fmt.Fprint(os.Stderr, line)
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio image build:", err)
+		fmt.Fprintln(os.Stderr, "claudio image build:", describeErr(err))
 		return 1
 	}
 

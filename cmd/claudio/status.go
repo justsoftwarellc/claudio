@@ -17,14 +17,14 @@ func cmdStatus(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio status:", err)
+		fmt.Fprintln(os.Stderr, "claudio status:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
 
 	inst, err := c.Status(ctx, args[0])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio status:", err)
+		fmt.Fprintln(os.Stderr, "claudio status:", describeErr(err))
 		return 1
 	}
 

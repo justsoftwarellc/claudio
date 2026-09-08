@@ -61,7 +61,7 @@ func cmdPorts(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio ports:", err)
+		fmt.Fprintln(os.Stderr, "claudio ports:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
@@ -69,7 +69,7 @@ func cmdPorts(ctx context.Context, args []string) int {
 	if doAdd {
 		hostPort, err := c.AddPort(ctx, idOrName, addPort)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "claudio ports:", err)
+			fmt.Fprintln(os.Stderr, "claudio ports:", describeErr(err))
 			return 1
 		}
 		fmt.Printf("Reserved container port %d -> host port %d.\n", addPort, hostPort)
@@ -77,7 +77,7 @@ func cmdPorts(ctx context.Context, args []string) int {
 	}
 	if doRemove {
 		if err := c.RemovePort(ctx, idOrName, removePort); err != nil {
-			fmt.Fprintln(os.Stderr, "claudio ports:", err)
+			fmt.Fprintln(os.Stderr, "claudio ports:", describeErr(err))
 			return 1
 		}
 		fmt.Printf("Released container port %d.\n", removePort)
@@ -86,7 +86,7 @@ func cmdPorts(ctx context.Context, args []string) int {
 
 	inst, err := c.Status(ctx, idOrName)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio ports:", err)
+		fmt.Fprintln(os.Stderr, "claudio ports:", describeErr(err))
 		return 1
 	}
 	if len(inst.Ports) == 0 {

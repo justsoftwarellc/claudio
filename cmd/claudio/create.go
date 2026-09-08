@@ -104,7 +104,7 @@ func cmdCreate(ctx context.Context, args []string) int {
 
 	manualPorts, err := parseManualPorts(portsFlag)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio create:", err)
+		fmt.Fprintln(os.Stderr, "claudio create:", describeErr(err))
 		return 1
 	}
 
@@ -115,7 +115,7 @@ func cmdCreate(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio create:", err)
+		fmt.Fprintln(os.Stderr, "claudio create:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
@@ -145,7 +145,7 @@ func cmdCreate(ctx context.Context, args []string) int {
 		result, err = retryCreateWithSuggestedBranch(ctx, c, params, collision, assumeYes)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio create:", err)
+		fmt.Fprintln(os.Stderr, "claudio create:", describeErr(err))
 		return 1
 	}
 

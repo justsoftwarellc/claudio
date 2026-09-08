@@ -23,14 +23,14 @@ func cmdRestart(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio restart:", err)
+		fmt.Fprintln(os.Stderr, "claudio restart:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
 
 	result, err := c.Restart(ctx, idOrName, fresh, env, terminalProgress())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio restart:", err)
+		fmt.Fprintln(os.Stderr, "claudio restart:", describeErr(err))
 		return 1
 	}
 

@@ -29,13 +29,13 @@ func cmdDestroy(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio destroy:", err)
+		fmt.Fprintln(os.Stderr, "claudio destroy:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
 
 	if err := c.Destroy(ctx, core.DestroyParams{IDOrName: idOrName, KeepWorkspace: keepWorkspace}); err != nil {
-		fmt.Fprintln(os.Stderr, "claudio destroy:", err)
+		fmt.Fprintln(os.Stderr, "claudio destroy:", describeErr(err))
 		return 1
 	}
 

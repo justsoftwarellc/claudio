@@ -15,13 +15,13 @@ func cmdStop(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio stop:", err)
+		fmt.Fprintln(os.Stderr, "claudio stop:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
 
 	if err := c.Stop(ctx, args[0]); err != nil {
-		fmt.Fprintln(os.Stderr, "claudio stop:", err)
+		fmt.Fprintln(os.Stderr, "claudio stop:", describeErr(err))
 		return 1
 	}
 

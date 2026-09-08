@@ -44,14 +44,14 @@ func cmdLs(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio ls:", err)
+		fmt.Fprintln(os.Stderr, "claudio ls:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
 
 	instances, untracked, err := c.ListInstances(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio ls:", err)
+		fmt.Fprintln(os.Stderr, "claudio ls:", describeErr(err))
 		return 1
 	}
 
@@ -95,7 +95,7 @@ func printLsJSON(instances []core.InstanceView, untracked []core.UntrackedContai
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(lsJSON{Instances: instances, Untracked: untracked}); err != nil {
-		fmt.Fprintln(os.Stderr, "claudio ls:", err)
+		fmt.Fprintln(os.Stderr, "claudio ls:", describeErr(err))
 		return 1
 	}
 	return 0

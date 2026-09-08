@@ -25,13 +25,13 @@ func cmdAttach(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio attach:", err)
+		fmt.Fprintln(os.Stderr, "claudio attach:", describeErr(err))
 		return 1
 	}
 	inst, err := c.GetInstance(ctx, args[0])
 	if err != nil {
 		c.Close()
-		fmt.Fprintln(os.Stderr, "claudio attach:", err)
+		fmt.Fprintln(os.Stderr, "claudio attach:", describeErr(err))
 		return 1
 	}
 	c.Close() // done with the store; the exec below replaces this process anyway

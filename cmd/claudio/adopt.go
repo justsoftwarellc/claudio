@@ -21,20 +21,20 @@ func cmdAdopt(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio adopt:", err)
+		fmt.Fprintln(os.Stderr, "claudio adopt:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
 
 	target, err := resolveUntracked(ctx, c, args[0])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio adopt:", err)
+		fmt.Fprintln(os.Stderr, "claudio adopt:", describeErr(err))
 		return 1
 	}
 
 	instanceID, err := c.Adopt(ctx, target.ContainerID, target.CreatedAt)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio adopt:", err)
+		fmt.Fprintln(os.Stderr, "claudio adopt:", describeErr(err))
 		return 1
 	}
 
@@ -53,19 +53,19 @@ func cmdForget(ctx context.Context, args []string) int {
 
 	c, err := newClient(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio forget:", err)
+		fmt.Fprintln(os.Stderr, "claudio forget:", describeErr(err))
 		return 1
 	}
 	defer c.Close()
 
 	target, err := resolveUntracked(ctx, c, args[0])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudio forget:", err)
+		fmt.Fprintln(os.Stderr, "claudio forget:", describeErr(err))
 		return 1
 	}
 
 	if err := c.Forget(ctx, target.ContainerID); err != nil {
-		fmt.Fprintln(os.Stderr, "claudio forget:", err)
+		fmt.Fprintln(os.Stderr, "claudio forget:", describeErr(err))
 		return 1
 	}
 
