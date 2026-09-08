@@ -407,7 +407,9 @@ The builder generates a Dockerfile from this. Adding Python, Go, or Rust later b
 
 **UID/GID matching is a build arg, not a baked constant.** The image is built with `USER_UID`/`USER_GID` matched to the host user (here `501:20`, against Debian's default `1000:1000`) and cached per host — the same approach devcontainers take. Since `/workspace` is a bind mount, every file the agent creates carries the container's UID; OrbStack auto-maps ownership so a mismatch mostly works there, but it fails differently on Docker Desktop and native Linux. The failure this prevents is root-owned files appearing in the user's repo that need `sudo` to remove.
 
-**Repo layer (optional)** — if the repo has `.devcontainer/Dockerfile` or `.claudio/Dockerfile`, it is built `FROM` the resolved base as an escape hatch.
+**Repo layer (optional)** — if the repo has `.devcontainer/Dockerfile` or `.claudio/Dockerfile`, it is built `FROM` the resolved base as an escape hatch. An explicit `image.dockerfile` path in `.claudio.yml` takes precedence over both. The escape hatch **replaces** the generated Dockerfile rather than layering beneath it: a repo that supplies its own Dockerfile owns the whole build.
+
+**Building is explicit, never a side effect of `create`.** `claudio image build [--repo <path>]` is its own verb; `create` only *resolves* which image an instance needs and fails with an actionable error naming the exact build command when it is missing. A multi-minute, network-dependent Docker build must not happen as a surprise inside what the user asked to be a fast provisioning step. The per-repo tag is derived from the repo's identity (its `origin` remote where parseable, else a `file://` path form), so `image build --repo <clone>` and a later `create <same-url>` land on the same tag without either command knowing about the other.
 
 Devcontainer compatibility is a deliberate goal: `.devcontainer/devcontainer.json` already encodes image, features, forwarded ports, and post-create commands. Where it exists, Claudio reads it and treats it as a higher-precedence source than its own detection.
 
@@ -640,6 +642,8 @@ claudio destroy <id> [--keep-workspace]
 claudio cd <id>                          # prints the workspace path (shell fn wraps it)
 claudio adopt <container>                # reconcile an untracked container
 claudio forget <container>               # remove an untracked container
+claudio image build [--repo <path>]      # build claudio/base:latest, plus a repo-specific
+                                         # layer when --repo's .claudio.yml declares one
 
 # phase 2+
 claudio send <id> <prompt>
