@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rodrigomorales/claudio/internal/config"
+	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/idgen"
 	"github.com/rodrigomorales/claudio/internal/portdetect"
@@ -108,8 +109,9 @@ func CreateInstance(ctx context.Context, st CreateStore, params CreateParams) (C
 func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreateParams, cmd []string) (CreateResult, error) {
 	id, err := uniqueID(ctx, st)
 	if err != nil {
-		return CreateResult{}, err
+		return CreateResult{}, coreerr.Wrap(coreerr.Internal, "core: create", err)
 	}
+	op := fmt.Sprintf("core: create %s", id)
 
 	var root repo.Root
 	var branch string
@@ -122,7 +124,7 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		repoURL = "local:" + params.GreenfieldName // synthetic, for the repo_url column and claudio.repo label — never a real clone URL
 		root, err = repo.InitRoot(ctx, params.WorkspaceRoot, params.GreenfieldName)
 		if err != nil {
-			return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+			return CreateResult{}, coreerr.Wrap(coreerr.CloneFailed, op, err)
 		}
 		// InitRoot's main clone is itself a normal (non-bare) checkout of
 		// its default branch — verified empirically: a worktree cannot
@@ -140,28 +142,36 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 	} else {
 		root, err = repo.EnsureRoot(ctx, params.WorkspaceRoot, params.RepoURL)
 		if err != nil {
-			return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+			return CreateResult{}, coreerr.Wrap(coreerr.CloneFailed, op, err)
 		}
 		branch, newBranch, err = resolveBranch(ctx, root, id, params)
 		if err != nil {
-			return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+			// resolveBranch's only failure is --branch naming a branch
+			// that doesn't exist in the repo — the thing named wasn't
+			// found, same bucket as an unknown instance ID.
+			return CreateResult{}, coreerr.Wrap(coreerr.NotFound, op, err)
 		}
 	}
 	if err := st.UpsertRepo(ctx, root.Path, repoURL); err != nil {
-		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+		return CreateResult{}, coreerr.Wrap(coreerr.Internal, op, err)
 	}
 
 	worktreeDir, err := repo.AddWorktree(ctx, root, id, branch, newBranch)
 	if err != nil {
-		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+		// *repo.BranchCollisionError is the expected shape here — the
+		// branch is taken by another worktree, not a system failure — so
+		// it's Conflict rather than Internal, matching store.ErrInvalidTransition
+		// and store.ErrPortRangeExhausted's own Conflict classification
+		// elsewhere in this file.
+		return CreateResult{}, coreerr.Wrap(coreerr.Conflict, op, err)
 	}
 
 	if err := repo.ExcludeClaudioDir(root); err != nil {
-		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+		return CreateResult{}, coreerr.Wrap(coreerr.Internal, op, err)
 	}
 	if params.EnvFile != "" {
 		if err := repo.CopyEnvFile(params.EnvFile, worktreeDir); err != nil {
-			return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+			return CreateResult{}, coreerr.Wrap(coreerr.InvalidInput, op, err)
 		}
 	}
 
@@ -176,7 +186,7 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		Image:       params.Image,
 		CreatedAt:   createdAt,
 	}); err != nil {
-		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
+		return CreateResult{}, coreerr.Wrap(coreerr.Internal, op, err)
 	}
 
 	containerID, ports, err := provisionContainer(ctx, st, id, repoURL, root.Path, worktreeDir, createdAt, params, cmd, true)
@@ -187,6 +197,10 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		// CleanOnFail field of its own to act on (StartInstance shares it
 		// and must never delete a worktree on a *re*-provisioning
 		// failure — the instance already existed before that call).
+		//
+		// err is already a *coreerr.Error (failAndReturn wraps it as
+		// ProvisionFailed) — returned as-is so its code survives; only
+		// the extra cleanup-failure detail is appended to the message.
 		if params.CleanOnFail {
 			if rmErr := repo.RemoveWorktree(ctx, root, id); rmErr != nil {
 				return CreateResult{}, fmt.Errorf("%w (also failed to clean up worktree: %v)", err, rmErr)
@@ -362,15 +376,15 @@ type resolvedPort struct {
 func allocatePorts(ctx context.Context, st CreateStore, id, worktreeDir string, params CreateParams) ([]resolvedPort, error) {
 	detected, err := portdetect.Detect(worktreeDir)
 	if err != nil {
-		return nil, fmt.Errorf("detect ports: %w", err)
+		return nil, coreerr.Wrap(coreerr.Internal, "detect ports", err)
 	}
 	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
 	if err != nil {
-		return nil, fmt.Errorf("load repo config: %w", err)
+		return nil, coreerr.Wrap(coreerr.InvalidInput, "load repo config", err)
 	}
 	resolved, err := portdetect.Merge(detected, repoCfg.Ports, params.ManualPorts)
 	if err != nil {
-		return nil, fmt.Errorf("merge ports: %w", err)
+		return nil, coreerr.Wrap(coreerr.InvalidInput, "merge ports", err)
 	}
 
 	out := make([]resolvedPort, 0, len(resolved))
@@ -380,7 +394,8 @@ func allocatePorts(ctx context.Context, st CreateStore, id, worktreeDir string, 
 		}
 		hostPort, err := st.AllocatePort(ctx, id, r.Container, r.ServiceName, r.Source, r.DetectedFrom, params.PortRangeLow, params.PortRangeHigh)
 		if err != nil {
-			return nil, fmt.Errorf("allocate port for %s (container %d): %w", r.ServiceName, r.Container, describePortRangeExhausted(err, params.PortRangeLow, params.PortRangeHigh))
+			op := fmt.Sprintf("allocate port for %s (container %d)", r.ServiceName, r.Container)
+			return nil, wrapAllocatePort(op, err, params.PortRangeLow, params.PortRangeHigh)
 		}
 		out = append(out, resolvedPort{Resolved: r, HostPort: hostPort})
 	}
@@ -441,9 +456,27 @@ func uniqueID(ctx context.Context, st CreateStore) (string, error) {
 	return "", fmt.Errorf("core: could not generate a unique instance id after %d attempts", maxAttempts)
 }
 
+// failAndReturn marks the instance StepFailed and wraps cause as a
+// coreerr.Error — every call site is inside provisionContainer, past the
+// point a repo/branch/worktree problem could occur, so anything reaching
+// here is "provisioning didn't reach StepHealthy" by default
+// (ProvisionFailed). If cause is already a *coreerr.Error — e.g.
+// allocatePorts' port-range-exhausted case, which is more specifically a
+// Conflict than a generic provisioning failure — that code is preserved
+// instead of being flattened to ProvisionFailed.
+//
+// Shared by CreateInstance and StartInstance/RestartInstance
+// (provisionContainer's callers), so the op name is generic ("core:
+// provision %s") rather than hardcoding "create" for a failure that
+// might have happened during a restart.
 func failAndReturn(ctx context.Context, st CreateStore, id string, cause error) error {
+	op := fmt.Sprintf("core: provision %s", id)
 	if err := st.MarkFailed(ctx, id); err != nil {
-		return fmt.Errorf("core: create %s: %w (also failed to mark failed: %v)", id, cause, err)
+		return coreerr.Wrap(coreerr.Internal, op, fmt.Errorf("%w (also failed to mark failed: %v)", cause, err))
 	}
-	return fmt.Errorf("core: create %s: %w", id, cause)
+	code := coreerr.ProvisionFailed
+	if existing, ok := coreerr.CodeOf(cause); ok {
+		code = existing
+	}
+	return coreerr.Wrap(code, op, cause)
 }

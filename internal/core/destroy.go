@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/repo"
 	"github.com/rodrigomorales/claudio/internal/store"
@@ -42,12 +43,13 @@ type DestroyParams struct {
 func DestroyInstance(ctx context.Context, st DestroyStore, params DestroyParams) error {
 	inst, err := st.GetInstance(ctx, params.IDOrName)
 	if err != nil {
-		return fmt.Errorf("core: destroy %s: %w", params.IDOrName, err)
+		return wrapGetInstance("core: destroy", params.IDOrName, err)
 	}
+	op := fmt.Sprintf("core: destroy %s", inst.ID)
 
 	if inst.ContainerID != nil && *inst.ContainerID != "" {
 		if err := engine.RemoveContainer(ctx, params.DockerHost, *inst.ContainerID); err != nil {
-			return fmt.Errorf("core: destroy %s: remove container: %w", inst.ID, err)
+			return coreerr.Wrap(coreerr.Unavailable, op+": remove container", err)
 		}
 	}
 
@@ -60,15 +62,15 @@ func DestroyInstance(ctx context.Context, st DestroyStore, params DestroyParams)
 		// synthetic "local:<name>" RepoURL (see RootFromPath's doc).
 		root := repo.RootFromPath(inst.RepoRoot)
 		if err := repo.RemoveWorktree(ctx, root, inst.ID); err != nil {
-			return fmt.Errorf("core: destroy %s: remove worktree: %w", inst.ID, err)
+			return coreerr.Wrap(coreerr.Internal, op+": remove worktree", err)
 		}
 	}
 
 	if err := st.TransitionDesiredState(ctx, inst.ID, store.StateDestroyed); err != nil {
-		return fmt.Errorf("core: destroy %s: %w", inst.ID, err)
+		return coreerr.Wrap(coreerr.Conflict, op, err)
 	}
 	if err := st.DeleteInstance(ctx, inst.ID); err != nil {
-		return fmt.Errorf("core: destroy %s: %w", inst.ID, err)
+		return coreerr.Wrap(coreerr.Internal, op, err)
 	}
 	return nil
 }

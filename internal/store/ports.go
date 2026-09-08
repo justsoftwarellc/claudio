@@ -9,6 +9,12 @@ import (
 
 var ErrPortRangeExhausted = errors.New("port range exhausted")
 
+// ErrPortNotMapped is returned by ReleasePort when the instance has no
+// reservation for the given container port — distinct from a real
+// database failure, so a caller (core.RemovePort) can tell "you asked to
+// remove something that was never there" from "the store itself broke."
+var ErrPortNotMapped = errors.New("store: no such port mapping")
+
 // AllocatePort reserves a free host port in [rangeLow, rangeHigh] for an
 // instance's container port, verifying with a real bind() probe before
 // committing. The reservation and probe happen inside one transaction so
@@ -142,7 +148,7 @@ func (s *Store) ReleasePort(ctx context.Context, instanceID string, containerPor
 		return fmt.Errorf("store: release port %d for %s: %w", containerPort, instanceID, err)
 	}
 	if n == 0 {
-		return fmt.Errorf("store: instance %s has no mapping for container port %d", instanceID, containerPort)
+		return fmt.Errorf("%w: instance %s, container port %d", ErrPortNotMapped, instanceID, containerPort)
 	}
 	return nil
 }

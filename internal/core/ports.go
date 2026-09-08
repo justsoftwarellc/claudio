@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/store"
 )
 
@@ -47,11 +48,12 @@ type PortsStore interface {
 func AddPort(ctx context.Context, st PortsStore, idOrName string, containerPort int, rangeLow, rangeHigh int) (hostPort int, err error) {
 	inst, err := st.GetInstance(ctx, idOrName)
 	if err != nil {
-		return 0, fmt.Errorf("core: ports %s --add %d: %w", idOrName, containerPort, err)
+		return 0, wrapGetInstance(fmt.Sprintf("core: ports --add %d", containerPort), idOrName, err)
 	}
+	op := fmt.Sprintf("core: ports %s --add %d", inst.ID, containerPort)
 	hostPort, err = st.AllocatePort(ctx, inst.ID, containerPort, fmt.Sprintf("manual-%d", containerPort), store.PortManual, nil, rangeLow, rangeHigh)
 	if err != nil {
-		return 0, fmt.Errorf("core: ports %s --add %d: %w", inst.ID, containerPort, describePortRangeExhausted(err, rangeLow, rangeHigh))
+		return 0, wrapAllocatePort(op, err, rangeLow, rangeHigh)
 	}
 	return hostPort, nil
 }
@@ -62,10 +64,15 @@ func AddPort(ctx context.Context, st PortsStore, idOrName string, containerPort 
 func RemovePort(ctx context.Context, st PortsStore, idOrName string, containerPort int) error {
 	inst, err := st.GetInstance(ctx, idOrName)
 	if err != nil {
-		return fmt.Errorf("core: ports %s --remove %d: %w", idOrName, containerPort, err)
+		return wrapGetInstance(fmt.Sprintf("core: ports --remove %d", containerPort), idOrName, err)
 	}
+	op := fmt.Sprintf("core: ports %s --remove %d", inst.ID, containerPort)
 	if err := st.ReleasePort(ctx, inst.ID, containerPort); err != nil {
-		return fmt.Errorf("core: ports %s --remove %d: %w", inst.ID, containerPort, err)
+		code := coreerr.Internal
+		if errors.Is(err, store.ErrPortNotMapped) {
+			code = coreerr.NotFound
+		}
+		return coreerr.Wrap(code, op, err)
 	}
 	return nil
 }

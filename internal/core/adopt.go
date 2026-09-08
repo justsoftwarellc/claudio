@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/store"
 )
@@ -35,9 +36,10 @@ type AdoptStore interface {
 // label (the adoption's whole point is trusting the label, not
 // generating a new identity).
 func AdoptContainer(ctx context.Context, st AdoptStore, dockerHost, containerID string, createdAt int64) (instanceID string, err error) {
+	op := fmt.Sprintf("core: adopt %s", containerID)
 	containers, err := engine.ListClaudioContainers(ctx, dockerHost, true)
 	if err != nil {
-		return "", fmt.Errorf("core: adopt: list containers: %w", err)
+		return "", coreerr.Wrap(coreerr.Unavailable, op+": list containers", err)
 	}
 	var target *engine.ContainerState
 	for i := range containers {
@@ -47,10 +49,10 @@ func AdoptContainer(ctx context.Context, st AdoptStore, dockerHost, containerID 
 		}
 	}
 	if target == nil {
-		return "", fmt.Errorf("core: adopt: no Claudio-labelled container %s found", containerID)
+		return "", coreerr.Wrap(coreerr.NotFound, op, fmt.Errorf("no Claudio-labelled container %s found", containerID))
 	}
 	if target.InstanceID == "" {
-		return "", fmt.Errorf("core: adopt: container %s has no claudio.instance.id label", containerID)
+		return "", coreerr.Wrap(coreerr.InvalidInput, op, fmt.Errorf("container %s has no claudio.instance.id label", containerID))
 	}
 
 	if err := st.CreateInstance(ctx, store.NewInstanceParams{
@@ -63,17 +65,17 @@ func AdoptContainer(ctx context.Context, st AdoptStore, dockerHost, containerID 
 		RuntimeProfile: "",
 		CreatedAt:      createdAt,
 	}); err != nil {
-		return "", fmt.Errorf("core: adopt: create instance row: %w", err)
+		return "", coreerr.Wrap(coreerr.Internal, op+": create instance row", err)
 	}
 
 	ports, err := engine.InspectPublishedPorts(ctx, dockerHost, containerID)
 	if err != nil {
-		return "", fmt.Errorf("core: adopt: inspect published ports: %w", err)
+		return "", coreerr.Wrap(coreerr.Unavailable, op+": inspect published ports", err)
 	}
 	for _, p := range ports {
 		if _, err := st.AllocatePort(ctx, target.InstanceID, p.ContainerPort,
 			fmt.Sprintf("port-%d", p.ContainerPort), store.PortManual, nil, p.HostPort, p.HostPort); err != nil {
-			return "", fmt.Errorf("core: adopt: re-reserve port %d: %w", p.HostPort, err)
+			return "", coreerr.Wrap(coreerr.Conflict, fmt.Sprintf("%s: re-reserve port %d", op, p.HostPort), err)
 		}
 	}
 
@@ -84,5 +86,8 @@ func AdoptContainer(ctx context.Context, st AdoptStore, dockerHost, containerID 
 // half of ROD-99's adopt/forget pair, for when the user decides an
 // orphaned container is not worth reconstructing a row for.
 func ForgetContainer(ctx context.Context, dockerHost, containerID string) error {
-	return engine.RemoveContainer(ctx, dockerHost, containerID)
+	if err := engine.RemoveContainer(ctx, dockerHost, containerID); err != nil {
+		return coreerr.Wrap(coreerr.Unavailable, fmt.Sprintf("core: forget %s", containerID), err)
+	}
+	return nil
 }

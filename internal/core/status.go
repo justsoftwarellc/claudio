@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/store"
 )
@@ -27,11 +28,12 @@ type StatusStore interface {
 func GetInstanceView(ctx context.Context, st StatusStore, dockerHost, idOrName string) (InstanceView, error) {
 	inst, err := st.GetInstance(ctx, idOrName)
 	if err != nil {
-		return InstanceView{}, fmt.Errorf("core: status %s: %w", idOrName, err)
+		return InstanceView{}, wrapGetInstance("core: status", idOrName, err)
 	}
+	op := fmt.Sprintf("core: status %s", inst.ID)
 	ports, err := st.PortMappings(ctx, inst.ID)
 	if err != nil {
-		return InstanceView{}, fmt.Errorf("core: status %s: %w", inst.ID, err)
+		return InstanceView{}, coreerr.Wrap(coreerr.Internal, op, err)
 	}
 
 	view := InstanceView{Instance: inst, Ports: ports}
@@ -40,7 +42,7 @@ func GetInstanceView(ctx context.Context, st StatusStore, dockerHost, idOrName s
 	if inst.ContainerID != nil && *inst.ContainerID != "" {
 		containers, err := engine.ListClaudioContainers(ctx, dockerHost, true)
 		if err != nil {
-			return InstanceView{}, fmt.Errorf("core: status %s: list containers: %w", inst.ID, err)
+			return InstanceView{}, coreerr.Wrap(coreerr.Unavailable, op+": list containers", err)
 		}
 		for _, cs := range containers {
 			if cs.ContainerID != *inst.ContainerID {

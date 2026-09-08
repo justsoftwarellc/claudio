@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 
+	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 )
 
@@ -14,7 +15,10 @@ import (
 func DetectRuntime(ctx context.Context, host string) (RuntimeView, error) {
 	info, err := engine.DetectRuntime(ctx, host)
 	if err != nil {
-		return RuntimeView{}, err
+		// A failure here means no Docker-API-compatible daemon was
+		// reachable at all — the runtime environment isn't ready, not a
+		// bad argument the caller passed.
+		return RuntimeView{}, coreerr.Wrap(coreerr.Unavailable, "core: detect runtime", err)
 	}
 	return RuntimeView{
 		Profile:         string(info.Profile),

@@ -2,9 +2,9 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 
+	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/store"
 )
@@ -43,12 +43,12 @@ type InstanceStore interface {
 func ListInstances(ctx context.Context, st InstanceStore, dockerHost string) ([]InstanceView, []UntrackedContainer, error) {
 	instances, err := st.ListInstances(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, coreerr.Wrap(coreerr.Internal, "core: list instances", err)
 	}
 
 	containers, err := engine.ListClaudioContainers(ctx, dockerHost, true)
 	if err != nil {
-		return nil, nil, fmt.Errorf("core: list containers: %w", err)
+		return nil, nil, coreerr.Wrap(coreerr.Unavailable, "core: list instances", err)
 	}
 	byInstanceID := make(map[string]engine.ContainerState, len(containers))
 	claimed := make(map[string]bool, len(containers))
@@ -62,7 +62,7 @@ func ListInstances(ctx context.Context, st InstanceStore, dockerHost string) ([]
 	for _, inst := range instances {
 		ports, err := st.PortMappings(ctx, inst.ID)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, coreerr.Wrap(coreerr.Internal, "core: list instances", err)
 		}
 
 		view := InstanceView{Instance: inst, Ports: ports}

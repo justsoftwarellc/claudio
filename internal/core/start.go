@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/store"
 )
 
@@ -48,32 +49,34 @@ func StartInstance(ctx context.Context, st StartStore, params CreateParams, idOr
 func startInstanceWithCmd(ctx context.Context, st StartStore, params CreateParams, idOrName string, fresh bool, cmd []string) (CreateResult, error) {
 	inst, err := st.GetInstance(ctx, idOrName)
 	if err != nil {
-		return CreateResult{}, fmt.Errorf("core: start %s: %w", idOrName, err)
+		return CreateResult{}, wrapGetInstance("core: start", idOrName, err)
 	}
+	op := fmt.Sprintf("core: start %s", inst.ID)
 	if inst.DesiredState != store.StateStopped {
-		return CreateResult{}, fmt.Errorf("core: start %s: instance is %s, not %s — nothing to start", inst.ID, inst.DesiredState, store.StateStopped)
+		return CreateResult{}, coreerr.Wrap(coreerr.Conflict, op,
+			fmt.Errorf("instance is %s, not %s — nothing to start", inst.DesiredState, store.StateStopped))
 	}
 
 	if fresh {
 		homeDir := inst.WorktreeDir + ".home"
 		if err := os.RemoveAll(homeDir); err != nil {
-			return CreateResult{}, fmt.Errorf("core: start %s: --fresh: remove home dir: %w", inst.ID, err)
+			return CreateResult{}, coreerr.Wrap(coreerr.Internal, op+": --fresh: remove home dir", err)
 		}
 		// provisionContainer below recreates homeDir via os.MkdirAll before
 		// calling engine.CreateAndStart, same as a brand new instance.
 	}
 
 	if err := st.TransitionProvisionStep(ctx, inst.ID, store.StepPending); err != nil {
-		return CreateResult{}, fmt.Errorf("core: start %s: %w", inst.ID, err)
+		return CreateResult{}, coreerr.Wrap(coreerr.Internal, op, err)
 	}
 
 	containerID, ports, err := provisionContainer(ctx, st, inst.ID, inst.RepoURL, inst.RepoRoot, inst.WorktreeDir, inst.CreatedAt, params, cmd, false)
 	if err != nil {
-		return CreateResult{}, err // provisionContainer already marks StepFailed
+		return CreateResult{}, err // provisionContainer already marks StepFailed; already a *coreerr.Error
 	}
 
 	if err := st.TransitionDesiredState(ctx, inst.ID, store.StateRunning); err != nil {
-		return CreateResult{}, fmt.Errorf("core: start %s: %w", inst.ID, err)
+		return CreateResult{}, coreerr.Wrap(coreerr.Internal, op, err)
 	}
 
 	mappings := make([]store.PortMapping, 0, len(ports))

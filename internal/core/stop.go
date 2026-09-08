@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/store"
 )
@@ -29,17 +30,18 @@ type StopStore interface {
 func StopInstance(ctx context.Context, st StopStore, dockerHost, idOrName string) error {
 	inst, err := st.GetInstance(ctx, idOrName)
 	if err != nil {
-		return fmt.Errorf("core: stop %s: %w", idOrName, err)
+		return wrapGetInstance("core: stop", idOrName, err)
 	}
+	op := fmt.Sprintf("core: stop %s", inst.ID)
 
 	if inst.ContainerID != nil && *inst.ContainerID != "" {
 		if err := engine.RemoveContainer(ctx, dockerHost, *inst.ContainerID); err != nil {
-			return fmt.Errorf("core: stop %s: remove container: %w", inst.ID, err)
+			return coreerr.Wrap(coreerr.Unavailable, op+": remove container", err)
 		}
 	}
 
 	if err := st.TransitionDesiredState(ctx, inst.ID, store.StateStopped); err != nil {
-		return fmt.Errorf("core: stop %s: %w", inst.ID, err)
+		return coreerr.Wrap(coreerr.Conflict, op, err)
 	}
 	return nil
 }
