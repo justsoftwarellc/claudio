@@ -97,7 +97,7 @@ func CreateAndStart(ctx context.Context, host string, spec CreateSpec) (containe
 	}
 	defer cli.Close()
 
-	containerWorktreeDir, err := containerWorkdir(spec.RepoRoot, spec.WorktreeDir)
+	containerWorktreeDir, err := ContainerWorkdir(spec.RepoRoot, spec.WorktreeDir)
 	if err != nil {
 		return "", err
 	}
@@ -164,12 +164,16 @@ func CreateAndStart(ctx context.Context, host string, spec CreateSpec) (containe
 	return resp.ID, nil
 }
 
-// containerWorkdir computes /repo/worktrees/<name> from the host
+// ContainerWorkdir computes /repo/worktrees/<name> from the host
 // worktree path, per docs/architecture.md Appendix B: the container
 // mounts the whole repo root at /repo, and the worktree's position under
 // it must be preserved verbatim (worktrees/<name>) for the relative
 // gitdir pointers rewritten by internal/repo.AddWorktree to resolve.
-func containerWorkdir(repoRoot, worktreeDir string) (string, error) {
+// Exported so callers running something else inside the container after
+// creation (e.g. core's post_create hook, docs/architecture.md §5.1) can
+// compute the same working directory CreateAndStart itself used, rather
+// than duplicating this computation or guessing.
+func ContainerWorkdir(repoRoot, worktreeDir string) (string, error) {
 	rel, err := filepath.Rel(repoRoot, worktreeDir)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("engine: worktree %s is not under repo root %s", worktreeDir, repoRoot)

@@ -169,7 +169,7 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		return CreateResult{}, fmt.Errorf("core: create %s: %w", id, err)
 	}
 
-	containerID, ports, err := provisionContainer(ctx, st, id, repoURL, root.Path, worktreeDir, createdAt, params, cmd)
+	containerID, ports, err := provisionContainer(ctx, st, id, repoURL, root.Path, worktreeDir, createdAt, params, cmd, true)
 	if err != nil {
 		// provisionContainer already marks StepFailed; CleanOnFail is the
 		// one additional thing left to the caller (ROD-99's
@@ -221,7 +221,13 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 // only knows the instance ID until it loads the stored row. Passing it
 // explicitly is what avoids both callers needing to duplicate that
 // resolution or risk drifting on it.
-func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRoot, worktreeDir string, createdAt int64, params CreateParams, cmd []string) (containerID string, ports []resolvedPort, err error) {
+//
+// runPostCreateHook gates docs/architecture.md §5.1's post_create
+// commands to the original create only: the doc says they "run once,"
+// so StartInstance/RestartInstance pass false to skip re-running them on
+// every container recreation (which for something like "npm ci" would
+// be wasteful, and contradicts "once" even if usually idempotent).
+func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRoot, worktreeDir string, createdAt int64, params CreateParams, cmd []string, runPostCreateHook bool) (containerID string, ports []resolvedPort, err error) {
 	if err := st.TransitionProvisionStep(ctx, id, store.StepRepoReady); err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
@@ -278,6 +284,12 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
 
+	if runPostCreateHook {
+		if err := runPostCreate(ctx, params.DockerHost, containerID, repoRoot, worktreeDir); err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+	}
+
 	// StepHealthy: phase 1 has no health probe yet (that needs the
 	// container to expose something to probe, e.g. an HTTP endpoint or a
 	// tmux-session check) — a started container is treated as healthy
@@ -287,6 +299,43 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 	}
 
 	return containerID, ports, nil
+}
+
+// runPostCreate executes .claudio.yml's post_create commands inside the
+// just-started container, in order, stopping at the first failure —
+// docs/architecture.md §5.1: "run once, inside the container, after
+// mounting." Reloads the repo config from disk rather than threading
+// PostCreate through from allocatePorts' own load: cheap (one small YAML
+// file), and keeps this concern's data flow independent of port
+// resolution's, which happens to load the same file for an unrelated
+// reason.
+//
+// A missing .claudio.yml or an empty post_create list is not an error —
+// most repos declare neither, and provisioning must not require one.
+func runPostCreate(ctx context.Context, dockerHost, containerID, repoRoot, worktreeDir string) error {
+	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
+	if err != nil {
+		return fmt.Errorf("post_create: load repo config: %w", err)
+	}
+	if len(repoCfg.PostCreate) == 0 {
+		return nil
+	}
+
+	containerWorkdir, err := engine.ContainerWorkdir(repoRoot, worktreeDir)
+	if err != nil {
+		return fmt.Errorf("post_create: %w", err)
+	}
+
+	for _, cmd := range repoCfg.PostCreate {
+		output, exitCode, err := engine.RunInContainer(ctx, dockerHost, containerID, containerWorkdir, cmd)
+		if err != nil {
+			return fmt.Errorf("post_create %q: %w", cmd, err)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("post_create %q: exited %d: %s", cmd, exitCode, output)
+		}
+	}
+	return nil
 }
 
 // resolvedPort is portdetect.Resolved plus the host port AllocatePort
