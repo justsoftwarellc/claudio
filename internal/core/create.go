@@ -104,8 +104,12 @@ type CreateResult struct {
 // worktree and any already-reserved ports are left in place for the
 // user to inspect or retry, per docs/architecture.md's stance that
 // destroying state on failure risks losing diagnostic information.
-func CreateInstance(ctx context.Context, st CreateStore, params CreateParams) (CreateResult, error) {
-	return createInstanceWithCmd(ctx, st, params, nil)
+//
+// progress is called at each provisioning milestone — docs/architecture.md
+// §12.4's caller-supplied sink, so a long-running create (clone, pull,
+// container start) doesn't sit silent until it finishes. May be nil.
+func CreateInstance(ctx context.Context, st CreateStore, params CreateParams, progress ProgressFunc) (CreateResult, error) {
+	return createInstanceWithCmd(ctx, st, params, nil, progress)
 }
 
 // createInstanceWithCmd is CreateInstance's real implementation, taking
@@ -115,12 +119,13 @@ func CreateInstance(ctx context.Context, st CreateStore, params CreateParams) (C
 // same way internal/engine's own tests do. Production callers always go
 // through CreateInstance, which passes nil (use the image's own
 // entrypoint).
-func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreateParams, cmd []string) (CreateResult, error) {
+func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreateParams, cmd []string, progress ProgressFunc) (CreateResult, error) {
 	id, err := uniqueID(ctx, st)
 	if err != nil {
 		return CreateResult{}, coreerr.Wrap(coreerr.Internal, "core: create", err)
 	}
 	op := fmt.Sprintf("core: create %s", id)
+	reportProgress(progress, store.StepPending, fmt.Sprintf("generated instance id %s", id))
 
 	var root repo.Root
 	var branch string
@@ -197,8 +202,9 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 	}); err != nil {
 		return CreateResult{}, coreerr.Wrap(coreerr.Internal, op, err)
 	}
+	reportProgress(progress, store.StepRepoReady, fmt.Sprintf("worktree ready at %s (branch %s)", worktreeDir, branch))
 
-	containerID, ports, err := provisionContainer(ctx, st, id, repoURL, root.Path, worktreeDir, createdAt, params, cmd, true)
+	containerID, ports, err := provisionContainer(ctx, st, id, repoURL, root.Path, worktreeDir, createdAt, params, cmd, true, progress)
 	if err != nil {
 		// provisionContainer already marks StepFailed; CleanOnFail is the
 		// one additional thing left to the caller (ROD-99's
@@ -260,7 +266,7 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 // so StartInstance/RestartInstance pass false to skip re-running them on
 // every container recreation (which for something like "npm ci" would
 // be wasteful, and contradicts "once" even if usually idempotent).
-func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRoot, worktreeDir string, createdAt int64, params CreateParams, cmd []string, runPostCreateHook bool) (containerID string, ports []resolvedPort, err error) {
+func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRoot, worktreeDir string, createdAt int64, params CreateParams, cmd []string, runPostCreateHook bool, progress ProgressFunc) (containerID string, ports []resolvedPort, err error) {
 	if err := st.TransitionProvisionStep(ctx, id, store.StepRepoReady); err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
@@ -272,6 +278,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 	if err := st.TransitionProvisionStep(ctx, id, store.StepPortsReady); err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
+	reportProgress(progress, store.StepPortsReady, fmt.Sprintf("%d port(s) allocated", len(ports)))
 
 	// StepConfigReady: phase 1 has no resolved.yml materialization step of
 	// its own yet (that's the artifact docs/architecture.md §12.3
@@ -294,6 +301,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		return "", nil, failAndReturn(ctx, st, id, fmt.Errorf("create home dir: %w", err))
 	}
 
+	reportProgress(progress, store.StepConfigReady, "starting container")
 	containerID, err = engine.CreateAndStart(ctx, params.DockerHost, engine.CreateSpec{
 		InstanceID:  id,
 		RepoURL:     repoURL,
@@ -319,6 +327,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 	if err := st.TransitionProvisionStep(ctx, id, store.StepContainerUp); err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
+	reportProgress(progress, store.StepContainerUp, fmt.Sprintf("container %s started", shortContainerID(containerID)))
 
 	if runPostCreateHook {
 		if err := runPostCreate(ctx, params.DockerHost, containerID, repoRoot, worktreeDir); err != nil {
@@ -333,6 +342,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 	if err := st.TransitionProvisionStep(ctx, id, store.StepHealthy); err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
+	reportProgress(progress, store.StepHealthy, "ready")
 
 	return containerID, ports, nil
 }

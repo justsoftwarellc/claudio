@@ -38,12 +38,12 @@ func (l *Local) RuntimeInfo(ctx context.Context) (core.RuntimeView, error) {
 // config (workspace root, docker host, port range, default resources and
 // image — docs/architecture.md §12.3's three-layer resolution) so the
 // CLI layer only ever supplies what the user actually typed.
-func (l *Local) Create(ctx context.Context, params core.CreateParams) (core.CreateResult, error) {
+func (l *Local) Create(ctx context.Context, params core.CreateParams, progress core.ProgressFunc) (core.CreateResult, error) {
 	params, err := l.resolveCreateParams(params)
 	if err != nil {
 		return core.CreateResult{}, err
 	}
-	return core.CreateInstance(ctx, l.store, params)
+	return core.CreateInstance(ctx, l.store, params, progress)
 }
 
 // resolveCreateParams fills in the resolved-global-config fields shared
@@ -102,20 +102,20 @@ func (l *Local) Stop(ctx context.Context, idOrName string) error {
 	return core.StopInstance(ctx, l.store, l.global.Runtime.DockerHost, idOrName)
 }
 
-func (l *Local) Start(ctx context.Context, idOrName string, fresh bool, env map[string]string) (core.CreateResult, error) {
+func (l *Local) Start(ctx context.Context, idOrName string, fresh bool, env map[string]string, progress core.ProgressFunc) (core.CreateResult, error) {
 	params, err := l.resolveCreateParams(core.CreateParams{Env: env})
 	if err != nil {
 		return core.CreateResult{}, err
 	}
-	return core.StartInstance(ctx, l.store, params, idOrName, fresh)
+	return core.StartInstance(ctx, l.store, params, idOrName, fresh, progress)
 }
 
-func (l *Local) Restart(ctx context.Context, idOrName string, fresh bool, env map[string]string) (core.CreateResult, error) {
+func (l *Local) Restart(ctx context.Context, idOrName string, fresh bool, env map[string]string, progress core.ProgressFunc) (core.CreateResult, error) {
 	params, err := l.resolveCreateParams(core.CreateParams{Env: env})
 	if err != nil {
 		return core.CreateResult{}, err
 	}
-	return core.RestartInstance(ctx, l.store, l.global.Runtime.DockerHost, params, idOrName, fresh)
+	return core.RestartInstance(ctx, l.store, l.global.Runtime.DockerHost, params, idOrName, fresh, progress)
 }
 
 func (l *Local) AddPort(ctx context.Context, idOrName string, containerPort int) (int, error) {

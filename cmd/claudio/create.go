@@ -139,7 +139,7 @@ func cmdCreate(ctx context.Context, args []string) int {
 		PublishAllInterfaces: publishAllInterfaces,
 	}
 
-	result, err := c.Create(ctx, params)
+	result, err := c.Create(ctx, params, terminalProgress())
 	var collision *repo.BranchCollisionError
 	if errors.As(err, &collision) {
 		result, err = retryCreateWithSuggestedBranch(ctx, c, params, collision, assumeYes)
@@ -190,7 +190,7 @@ func retryCreateWithSuggestedBranch(ctx context.Context, c client.Client, params
 	fmt.Fprintf(os.Stderr, "Creating %s instead.\n", suggested)
 	params.NewBranch = suggested
 	params.Branch = ""
-	return c.Create(ctx, params)
+	return c.Create(ctx, params, terminalProgress())
 }
 
 // suggestBranchName mirrors repo.SuggestBranchName's numeric-suffix

@@ -14,7 +14,7 @@ import (
 // need the real claudio/base image built (see createForTest's doc).
 func startInstanceForTest(t *testing.T, s *store.Store, params CreateParams, idOrName string, fresh bool) (CreateResult, error) {
 	t.Helper()
-	return startInstanceWithCmd(context.Background(), s, params, idOrName, fresh, []string{"sleep", "60"})
+	return startInstanceWithCmd(context.Background(), s, params, idOrName, fresh, []string{"sleep", "60"}, nil)
 }
 
 func restartInstanceForTest(t *testing.T, s *store.Store, params CreateParams, idOrName string, fresh bool) (CreateResult, error) {
@@ -22,7 +22,7 @@ func restartInstanceForTest(t *testing.T, s *store.Store, params CreateParams, i
 	if err := StopInstance(context.Background(), s, "", idOrName); err != nil {
 		return CreateResult{}, err
 	}
-	return startInstanceWithCmd(context.Background(), s, params, idOrName, fresh, []string{"sleep", "60"})
+	return startInstanceWithCmd(context.Background(), s, params, idOrName, fresh, []string{"sleep", "60"}, nil)
 }
 
 func TestStopInstanceRemovesContainerReleasesPortsKeepsWorktree(t *testing.T) {

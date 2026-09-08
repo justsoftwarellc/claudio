@@ -33,7 +33,11 @@ type Client interface {
 	// params.PublishAllInterfaces carries `--publish-all-interfaces`
 	// through unchanged; everything else about port handling is resolved
 	// from global config on the far side (see local.Client).
-	Create(ctx context.Context, params core.CreateParams) (core.CreateResult, error)
+	//
+	// progress is docs/architecture.md §12.4's caller-supplied sink —
+	// phase 1's cmd/claudio passes a closure that prints to the terminal
+	// as provisioning advances; may be nil.
+	Create(ctx context.Context, params core.CreateParams, progress core.ProgressFunc) (core.CreateResult, error)
 
 	// GetInstance resolves an ID, alias, or unambiguous ID prefix to the
 	// full instance row — used by attach/destroy/cd, all of which accept
@@ -66,11 +70,12 @@ type Client interface {
 	// Code session (ROD-99/ROD-100). env carries the credential to inject
 	// into the new container, same as Create's params.Env — a stopped
 	// instance's old container held no reference to it, so it must be
-	// supplied again.
-	Start(ctx context.Context, idOrName string, fresh bool, env map[string]string) (core.CreateResult, error)
+	// supplied again. progress is the same caller-supplied sink as
+	// Create's; may be nil.
+	Start(ctx context.Context, idOrName string, fresh bool, env map[string]string, progress core.ProgressFunc) (core.CreateResult, error)
 
 	// Restart is Stop followed by Start as one operation (ROD-100).
-	Restart(ctx context.Context, idOrName string, fresh bool, env map[string]string) (core.CreateResult, error)
+	Restart(ctx context.Context, idOrName string, fresh bool, env map[string]string, progress core.ProgressFunc) (core.CreateResult, error)
 
 	// AddPort reserves a new host port for an existing instance —
 	// effective on the instance's next Restart, not immediately, since

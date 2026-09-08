@@ -38,15 +38,20 @@ type StartStore interface {
 // `--fresh` flag: the default behavior instead resumes the existing
 // Claude Code session, since transcripts and settings persist in home/
 // across a container rebuild (verified working in an earlier session).
-func StartInstance(ctx context.Context, st StartStore, params CreateParams, idOrName string, fresh bool) (CreateResult, error) {
-	return startInstanceWithCmd(ctx, st, params, idOrName, fresh, nil)
+//
+// progress is CreateInstance's same caller-supplied sink
+// (docs/architecture.md §12.4) — a start/restart re-runs the same
+// clone-through-container-start work a create does, so it deserves the
+// same visibility. May be nil.
+func StartInstance(ctx context.Context, st StartStore, params CreateParams, idOrName string, fresh bool, progress ProgressFunc) (CreateResult, error) {
+	return startInstanceWithCmd(ctx, st, params, idOrName, fresh, nil, progress)
 }
 
 // startInstanceWithCmd is StartInstance's real implementation, taking the
 // same test-only engine.CreateSpec.Cmd override as createInstanceWithCmd
 // — see that function's doc for why. Production callers always go
 // through StartInstance.
-func startInstanceWithCmd(ctx context.Context, st StartStore, params CreateParams, idOrName string, fresh bool, cmd []string) (CreateResult, error) {
+func startInstanceWithCmd(ctx context.Context, st StartStore, params CreateParams, idOrName string, fresh bool, cmd []string, progress ProgressFunc) (CreateResult, error) {
 	inst, err := st.GetInstance(ctx, idOrName)
 	if err != nil {
 		return CreateResult{}, wrapGetInstance("core: start", idOrName, err)
@@ -70,7 +75,7 @@ func startInstanceWithCmd(ctx context.Context, st StartStore, params CreateParam
 		return CreateResult{}, coreerr.Wrap(coreerr.Internal, op, err)
 	}
 
-	containerID, ports, err := provisionContainer(ctx, st, inst.ID, inst.RepoURL, inst.RepoRoot, inst.WorktreeDir, inst.CreatedAt, params, cmd, false)
+	containerID, ports, err := provisionContainer(ctx, st, inst.ID, inst.RepoURL, inst.RepoRoot, inst.WorktreeDir, inst.CreatedAt, params, cmd, false, progress)
 	if err != nil {
 		return CreateResult{}, err // provisionContainer already marks StepFailed; already a *coreerr.Error
 	}
@@ -108,11 +113,11 @@ func startInstanceWithCmd(ctx context.Context, st StartStore, params CreateParam
 func RestartInstance(ctx context.Context, st interface {
 	StopStore
 	StartStore
-}, dockerHost string, params CreateParams, idOrName string, fresh bool) (CreateResult, error) {
+}, dockerHost string, params CreateParams, idOrName string, fresh bool, progress ProgressFunc) (CreateResult, error) {
 	if err := StopInstance(ctx, st, dockerHost, idOrName); err != nil {
 		return CreateResult{}, fmt.Errorf("core: restart: %w", err)
 	}
-	result, err := StartInstance(ctx, st, params, idOrName, fresh)
+	result, err := StartInstance(ctx, st, params, idOrName, fresh, progress)
 	if err != nil {
 		return CreateResult{}, fmt.Errorf("core: restart: %w", err)
 	}

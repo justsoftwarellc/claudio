@@ -171,5 +171,5 @@ func TestCreateInstanceTwiceReusesRepoRoot(t *testing.T) {
 // own tests — see internal/engine/create_test.go's package comment).
 func createForTest(t *testing.T, s *store.Store, params CreateParams) (CreateResult, error) {
 	t.Helper()
-	return createInstanceWithCmd(context.Background(), s, params, []string{"sleep", "60"})
+	return createInstanceWithCmd(context.Background(), s, params, []string{"sleep", "60"}, nil)
 }

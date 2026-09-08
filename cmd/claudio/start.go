@@ -28,7 +28,7 @@ func cmdStart(ctx context.Context, args []string) int {
 	}
 	defer c.Close()
 
-	result, err := c.Start(ctx, idOrName, fresh, env)
+	result, err := c.Start(ctx, idOrName, fresh, env, terminalProgress())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio start:", err)
 		return 1

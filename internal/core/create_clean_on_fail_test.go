@@ -23,7 +23,7 @@ func TestCreateInstanceCleanOnFailRemovesWorktree(t *testing.T) {
 	params.Image = "claudio-test-nonexistent-registry.invalid/does-not-exist:latest"
 	params.CleanOnFail = true
 
-	_, err := CreateInstance(t.Context(), s, params)
+	_, err := CreateInstance(t.Context(), s, params, nil)
 	if err == nil {
 		t.Fatal("expected CreateInstance to fail with an unresolvable image")
 	}
@@ -56,7 +56,7 @@ func TestCreateInstanceWithoutCleanOnFailKeepsWorktree(t *testing.T) {
 	params := baseCreateParams(t, repoURL)
 	params.Image = "claudio-test-nonexistent-registry.invalid/does-not-exist:latest"
 
-	_, err := CreateInstance(t.Context(), s, params)
+	_, err := CreateInstance(t.Context(), s, params, nil)
 	if err == nil {
 		t.Fatal("expected CreateInstance to fail with an unresolvable image")
 	}
