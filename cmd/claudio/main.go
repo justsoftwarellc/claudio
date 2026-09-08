@@ -66,7 +66,8 @@ func printUsage() {
 
 Usage:
   claudio create <repo> [--branch B | --new-branch B] [--name N] [--ports c,...]
-                        [--publish-all-interfaces] [--clean-on-fail]
+                        [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N]
+                        [--clean-on-fail]
                                    provision a new sandboxed session
   claudio ls [--all]              list instances (--all includes stopped ones)
   claudio attach <id>             attach to an instance's Claude Code session

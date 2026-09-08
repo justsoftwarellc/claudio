@@ -23,6 +23,7 @@ import (
 type CreateStore interface {
 	CreateInstance(ctx context.Context, p store.NewInstanceParams) error
 	GetInstance(ctx context.Context, idOrName string) (store.Instance, error)
+	ListInstances(ctx context.Context) ([]store.Instance, error)
 	TransitionProvisionStep(ctx context.Context, instanceID string, step store.ProvisionStep) error
 	MarkFailed(ctx context.Context, instanceID string) error
 	SetContainerID(ctx context.Context, instanceID, containerID string) error
@@ -62,10 +63,26 @@ type CreateParams struct {
 	EnvFile        string                `json:"env_file,omitempty"` // --env-file: host path to copy into the worktree at .claudio/env (docs/architecture.md §5.1)
 	WorkspaceRoot  string                `json:"workspace_root,omitempty"`
 	Image          string                `json:"image,omitempty"`
-	Resources      engine.ResourceLimits `json:"resources,omitempty"`
-	PortRangeLow   int                   `json:"port_range_low,omitempty"`
-	PortRangeHigh  int                   `json:"port_range_high,omitempty"`
-	DockerHost     string                `json:"docker_host,omitempty"`
+	// Resources is the global-config baseline, resolved by
+	// client.Local.resolveCreateParams before CreateInstance ever runs —
+	// same "resolved ahead of time" contract as WorkspaceRoot/DockerHost
+	// above. provisionContainer layers the repo's own .claudio.yml
+	// request and ResourceOverride on top of this via resolveResources,
+	// once the worktree (and so .claudio.yml) is readable — mirroring how
+	// resolveImage layers the repo's image: section on top of an
+	// already-resolved default.
+	Resources engine.ResourceLimits `json:"resources,omitempty"`
+	// ResourceOverride is the local, per-instance override from
+	// `claudio create --memory/--cpus/--pids` (docs/architecture.md's
+	// three-layer resolution, ROD-112: "global < repo < local override").
+	// Only the fields the user actually typed are set; nil means no local
+	// override at all. This is the layer that must win over a repo's own
+	// request — a repo declaring "needs 12g" cannot make an instance
+	// unstartable on a smaller machine with no recourse.
+	ResourceOverride *config.Resources `json:"resource_override,omitempty"`
+	PortRangeLow     int               `json:"port_range_low,omitempty"`
+	PortRangeHigh    int               `json:"port_range_high,omitempty"`
+	DockerHost       string            `json:"docker_host,omitempty"`
 
 	// PublishAllInterfaces is `claudio create --publish-all-interfaces`
 	// (docs/architecture.md §6.2): publish this instance's ports on every
@@ -307,6 +324,17 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
 
+	resources, overrideNote, err := resolveResources(worktreeDir, params.Resources, params.ResourceOverride)
+	if err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+	if overrideNote != "" {
+		reportProgress(progress, store.StepConfigReady, overrideNote)
+	}
+	if note := checkMemoryBudget(ctx, st, params.DockerHost, id, resources.MemoryBytes); note != "" {
+		reportProgress(progress, store.StepConfigReady, note)
+	}
+
 	reportProgress(progress, store.StepConfigReady, "starting container")
 
 	// Checked here, right before CreateAndStart rather than earlier in
@@ -331,7 +359,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		WorktreeDir: worktreeDir,
 		HomeDir:     homeDir,
 		Ports:       toBindings(ports),
-		Resources:   params.Resources,
+		Resources:   resources,
 
 		PublishAllInterfaces: params.PublishAllInterfaces,
 
@@ -426,6 +454,118 @@ func runPostCreate(ctx context.Context, dockerHost, containerID, repoRoot, workt
 // which is the opposite of actionable. worktreeDir is exactly the
 // checked-out copy this function itself just read .claudio.yml from, so
 // it's guaranteed to work.
+// resolveResources layers the repo's own .claudio.yml resources: request
+// and a local ResourceOverride on top of global, the already-resolved
+// global-config baseline — docs/architecture.md's three-layer resolution
+// (ROD-112): "global config < repo .claudio.yml < local per-instance
+// override", later wins. Loaded here, not in resolveCreateParams,
+// because the repo layer needs .claudio.yml, which is only readable once
+// the worktree exists — the same reason resolveImage runs at this point
+// rather than earlier.
+//
+// note is a human-readable message when override actually changes what
+// the repo asked for, so `create` can report it rather than silently
+// substituting a different number than the one committed to the repo
+// (the issue's explicit requirement: "create says when it is overriding
+// a repo request rather than doing it silently"). Empty when there is
+// nothing to report — no override, or an override that doesn't conflict
+// with what the repo (or the global default, absent a repo request)
+// already resolved to.
+func resolveResources(worktreeDir string, global engine.ResourceLimits, override *config.Resources) (resources engine.ResourceLimits, note string, err error) {
+	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
+	if err != nil {
+		return engine.ResourceLimits{}, "", coreerr.Wrap(coreerr.InvalidInput, "resolve resources", err)
+	}
+
+	resolved := global
+	repoRequestedMemory := false
+	if repoCfg.Resources.Memory != nil {
+		mem, err := engine.ParseMemory(*repoCfg.Resources.Memory)
+		if err != nil {
+			return engine.ResourceLimits{}, "", coreerr.Wrap(coreerr.InvalidInput, "resolve resources", err)
+		}
+		resolved.MemoryBytes = mem
+		repoRequestedMemory = true
+	}
+	if repoCfg.Resources.CPUs != nil {
+		resolved.NanoCPUs = engine.NanoCPUs(*repoCfg.Resources.CPUs)
+	}
+	if repoCfg.Resources.PIDs != nil {
+		resolved.PIDs = int64(*repoCfg.Resources.PIDs)
+	}
+
+	if override == nil {
+		return resolved, "", nil
+	}
+	if override.Memory != nil {
+		mem, err := engine.ParseMemory(*override.Memory)
+		if err != nil {
+			return engine.ResourceLimits{}, "", coreerr.Wrap(coreerr.InvalidInput, "resolve resources", err)
+		}
+		if repoRequestedMemory && mem != resolved.MemoryBytes {
+			note = fmt.Sprintf("overriding repo's requested memory (%s) with %s", *repoCfg.Resources.Memory, *override.Memory)
+		}
+		resolved.MemoryBytes = mem
+	}
+	if override.CPUs != nil {
+		resolved.NanoCPUs = engine.NanoCPUs(*override.CPUs)
+	}
+	if override.PIDs != nil {
+		resolved.PIDs = int64(*override.PIDs)
+	}
+	return resolved, note, nil
+}
+
+// checkMemoryBudget warns (never blocks) when provisioning newInstanceID
+// with newMemoryBytes would push the sum of configured memory limits
+// across every other running instance past the VM's total memory — "warn
+// before provisioning ... rather than letting the Nth create quietly
+// destabilize the machine" (ROD-112). Best-effort: a failure to detect
+// the runtime or inspect a sibling container is swallowed (returns no
+// warning) rather than failing the create outright — the sum check is a
+// courtesy, not a safety mechanism the container's own OOM killer
+// doesn't already provide.
+func checkMemoryBudget(ctx context.Context, st CreateStore, dockerHost, newInstanceID string, newMemoryBytes int64) string {
+	if newMemoryBytes == 0 {
+		return ""
+	}
+	rt, err := engine.DetectRuntime(ctx, dockerHost)
+	if err != nil || rt.MemTotal == 0 {
+		return ""
+	}
+
+	instances, err := st.ListInstances(ctx)
+	if err != nil {
+		return ""
+	}
+	sum := newMemoryBytes
+	for _, inst := range instances {
+		if inst.ID == newInstanceID || inst.DesiredState != store.StateRunning || inst.ContainerID == nil {
+			continue
+		}
+		mem, err := engine.InspectMemoryLimit(ctx, dockerHost, *inst.ContainerID)
+		if err != nil || mem == 0 {
+			continue
+		}
+		sum += mem
+	}
+	if sum <= rt.MemTotal {
+		return ""
+	}
+	return fmt.Sprintf(
+		"warning: configured memory limits across running instances (%s) exceed the runtime's total memory (%s) — see `claudio ls` to free some up, or lower this instance's limit with --memory",
+		formatBytes(sum), formatBytes(rt.MemTotal),
+	)
+}
+
+func formatBytes(n int64) string {
+	const gib = 1 << 30
+	if n%gib == 0 {
+		return fmt.Sprintf("%dg", n/gib)
+	}
+	return fmt.Sprintf("%.1fg", float64(n)/gib)
+}
+
 func resolveImage(repoURL, worktreeDir, explicitImage string) (image, imageRepoHint string, err error) {
 	if explicitImage != "" {
 		return explicitImage, "", nil

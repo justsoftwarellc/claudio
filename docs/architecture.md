@@ -445,7 +445,7 @@ The container is a **security boundary against accident, and a partial boundary 
 - Non-root `agent` user; no `--privileged`; `--cap-drop=ALL` plus only what the toolchain needs.
 - `--security-opt no-new-privileges`.
 - Read-only root filesystem where the toolchain tolerates it, with `tmpfs` for `/tmp`.
-- Memory and CPU limits per instance — **6 GB / 4 CPUs** on this machine, set globally and overridable per repo (§12.3). Sized against the **OrbStack VM's 15.7 GB**, not the host's 36 GB: the VM cap is what containers actually share, and sizing against host RAM overcommits by more than 2×.
+- Memory and CPU limits per instance — **6 GB / 4 CPUs** on this machine, set globally and overridable per repo, and overridable again locally with `claudio create --memory M --cpus N --pids N` (§12.3's three-layer resolution: global < repo < local). `create` reports when a local override changes what the repo's own `.claudio.yml` requested, rather than substituting a different number silently. Sized against the **OrbStack VM's 15.7 GB**, not the host's 36 GB: the VM cap is what containers actually share, and sizing against host RAM overcommits by more than 2×.
 - PID limit (512) to contain fork bombs.
 - **An exceeded limit must be legible.** Docker exposes `OOMKilled` in container state; `claudio status` reports "killed: out of memory (limit 6g)" with the command to raise it, rather than a bare `STOPPED`. A limit that produces a baffling failure is worse than no limit — the reconciler would otherwise show a stopped container with no cause. `create` also warns when configured limits across running instances would exceed the VM's memory.
 - **No Docker socket mount by default.** Mounting `/var/run/docker.sock` into an agent container is a host-root escalation path. Repos that genuinely need Docker-in-Docker get a rootless DinD sidecar, opt-in per instance.
@@ -632,7 +632,8 @@ The daemon talks to a Docker endpoint via `DOCKER_HOST`. Nothing in the design a
 
 ```
 claudio create <repo> [--branch B | --new-branch B] [--name N] [--env-file F] [--ports c,...]
-                      [--publish-all-interfaces] [--clean-on-fail] [--yes]
+                      [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N]
+                      [--clean-on-fail] [--yes]
 claudio ls [--all] [--json]
 claudio attach <id>
 claudio status <id>

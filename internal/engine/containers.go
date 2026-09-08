@@ -153,6 +153,29 @@ func InspectOOMKilled(ctx context.Context, host, containerID string) (bool, erro
 	return inspect.State != nil && inspect.State.OOMKilled, nil
 }
 
+// InspectMemoryLimit returns a running container's configured memory
+// ceiling in bytes (its HostConfig.Memory), or 0 if it was created with
+// no limit — used to sum configured limits across running instances
+// before provisioning another one (ROD-112: "warn ... when the sum of
+// configured limits for running instances would exceed the VM's
+// memory").
+func InspectMemoryLimit(ctx context.Context, host, containerID string) (int64, error) {
+	cli, err := newClient(ctx, host)
+	if err != nil {
+		return 0, err
+	}
+	defer cli.Close()
+
+	inspect, err := cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return 0, fmt.Errorf("engine: inspect %s: %w", containerID, err)
+	}
+	if inspect.HostConfig == nil {
+		return 0, nil
+	}
+	return inspect.HostConfig.Memory, nil
+}
+
 func newClient(ctx context.Context, host string) (*client.Client, error) {
 	resolvedHost := host
 	if resolvedHost == "" {

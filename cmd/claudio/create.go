@@ -11,25 +11,30 @@ import (
 	"golang.org/x/term"
 
 	"github.com/rodrigomorales/claudio/internal/client"
+	"github.com/rodrigomorales/claudio/internal/config"
 	"github.com/rodrigomorales/claudio/internal/core"
+	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/portdetect"
 	"github.com/rodrigomorales/claudio/internal/repo"
 )
 
 // cmdCreate implements `claudio create <repo> [--branch B | --new-branch
-// B] [--name N] [--ports c,...] [--publish-all-interfaces] [--env-file F]
-// [--clean-on-fail] [--yes]`, plus the greenfield `claudio create --new <name>` path (no
-// upstream repo — docs/architecture.md §5.1). See §5.1/§9 and ROD-100.
-// The credential comes from credentialEnv (see env.go).
+// B] [--name N] [--ports c,...] [--publish-all-interfaces] [--memory M]
+// [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes]`, plus
+// the greenfield `claudio create --new <name>` path (no upstream repo —
+// docs/architecture.md §5.1). See §5.1/§9 and ROD-100. The credential
+// comes from credentialEnv (see env.go).
 func cmdCreate(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo> [--branch B | --new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--env-file F] [--clean-on-fail] [--yes]")
-		fmt.Fprintln(os.Stderr, "   or: claudio create --new <name> [--new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--env-file F] [--clean-on-fail]")
+		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo> [--branch B | --new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes]")
+		fmt.Fprintln(os.Stderr, "   or: claudio create --new <name> [--new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail]")
 		return 1
 	}
 
-	var repoURL, greenfieldName, branch, newBranch, name, portsFlag, envFile string
+	var repoURL, greenfieldName, branch, newBranch, name, portsFlag, envFile, memory string
 	var cleanOnFail, assumeYes, publishAllInterfaces bool
+	var cpus, pids int
+	var cpusSet, pidsSet bool
 
 	firstArg := args[0]
 	startFlags := 1
@@ -83,6 +88,37 @@ func cmdCreate(ctx context.Context, args []string) int {
 			envFile = args[i]
 		case "--publish-all-interfaces":
 			publishAllInterfaces = true
+		case "--memory":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "claudio create: --memory requires a value (e.g. 8g)")
+				return 1
+			}
+			memory = args[i]
+		case "--cpus":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "claudio create: --cpus requires a value")
+				return 1
+			}
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 {
+				fmt.Fprintf(os.Stderr, "claudio create: --cpus: %q is not a positive integer\n", args[i])
+				return 1
+			}
+			cpus, cpusSet = n, true
+		case "--pids":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "claudio create: --pids requires a value")
+				return 1
+			}
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 {
+				fmt.Fprintf(os.Stderr, "claudio create: --pids: %q is not a positive integer\n", args[i])
+				return 1
+			}
+			pids, pidsSet = n, true
 		case "--clean-on-fail":
 			cleanOnFail = true
 		case "--yes":
@@ -108,6 +144,26 @@ func cmdCreate(ctx context.Context, args []string) int {
 		return 1
 	}
 
+	var resourceOverride *config.Resources
+	if memory != "" || cpusSet || pidsSet {
+		if memory != "" {
+			if _, err := engine.ParseMemory(memory); err != nil {
+				fmt.Fprintf(os.Stderr, "claudio create: --memory: %q is not a valid amount (e.g. 8g, 512m)\n", memory)
+				return 1
+			}
+		}
+		resourceOverride = &config.Resources{}
+		if memory != "" {
+			resourceOverride.Memory = &memory
+		}
+		if cpusSet {
+			resourceOverride.CPUs = &cpus
+		}
+		if pidsSet {
+			resourceOverride.PIDs = &pids
+		}
+	}
+
 	env, ok := credentialEnv("claudio create")
 	if !ok {
 		return 1
@@ -126,15 +182,16 @@ func cmdCreate(ctx context.Context, args []string) int {
 	}
 
 	params := core.CreateParams{
-		RepoURL:        repoURL,
-		GreenfieldName: greenfieldName,
-		Branch:         branch,
-		NewBranch:      newBranch,
-		Name:           namePtr,
-		ManualPorts:    manualPorts,
-		Env:            env,
-		EnvFile:        envFile,
-		CleanOnFail:    cleanOnFail,
+		RepoURL:          repoURL,
+		GreenfieldName:   greenfieldName,
+		Branch:           branch,
+		NewBranch:        newBranch,
+		Name:             namePtr,
+		ManualPorts:      manualPorts,
+		Env:              env,
+		EnvFile:          envFile,
+		CleanOnFail:      cleanOnFail,
+		ResourceOverride: resourceOverride,
 
 		PublishAllInterfaces: publishAllInterfaces,
 	}
