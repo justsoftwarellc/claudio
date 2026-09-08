@@ -86,6 +86,17 @@ type Client interface {
 	// takes-effect-on-restart caveat as AddPort (ROD-98).
 	RemovePort(ctx context.Context, idOrName string, containerPort int) error
 
+	// BuildImage runs `claudio image build`: always builds+tags
+	// claudio/base:latest, and additionally builds a repo-specific layer
+	// on top of it when params.RepoPath names a repo whose .claudio.yml
+	// asks for one (ROD-96, docs/architecture.md §7.1). progress receives
+	// the build's own raw output lines, the same "long-running,
+	// network-dependent, don't sit silent" rationale as Create's
+	// ProgressFunc, but typed as func(string) rather than
+	// core.ProgressFunc since a build has no store.ProvisionStep of its
+	// own.
+	BuildImage(ctx context.Context, params core.BuildImageParams, progress func(string)) (core.BuildImageResult, error)
+
 	// DockerHost is the resolved runtime.docker_host used for this
 	// client's Docker calls — attach needs it directly since it execs
 	// into `docker`/the SDK itself rather than going through Client

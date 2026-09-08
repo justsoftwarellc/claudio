@@ -49,6 +49,8 @@ func run(args []string) int {
 		return cmdForget(ctx, args[1:])
 	case "daemon":
 		return cmdDaemon(ctx, args[1:])
+	case "image":
+		return cmdImage(ctx, args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return 0
@@ -79,6 +81,9 @@ Usage:
                                    remove an instance's container (and worktree)
   claudio adopt <container>       reconcile an untracked container into the store
   claudio forget <container>      remove an untracked container permanently
+  claudio image build [--repo <path>]
+                                   build claudio/base:latest (and a repo-specific
+                                   layer, if --repo's .claudio.yml asks for one)
   claudio daemon status           report daemon status (phase 1: no daemon yet — see ROD-95)
   claudio help                    show this message`)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/idgen"
+	"github.com/rodrigomorales/claudio/internal/imagebuild"
 	"github.com/rodrigomorales/claudio/internal/portdetect"
 	"github.com/rodrigomorales/claudio/internal/repo"
 	"github.com/rodrigomorales/claudio/internal/store"
@@ -301,12 +302,30 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		return "", nil, failAndReturn(ctx, st, id, fmt.Errorf("create home dir: %w", err))
 	}
 
+	image, imageRepoHint, err := resolveImage(repoURL, worktreeDir, params.Image)
+	if err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+
 	reportProgress(progress, store.StepConfigReady, "starting container")
+
+	// Checked here, right before CreateAndStart rather than earlier in
+	// this function: this is the exact point a missing image would
+	// otherwise surface as Docker's own opaque "no such image" (or a
+	// registry pull failure) from CreateAndStart itself — see
+	// EnsureImageAvailable's doc. Placed after the StepConfigReady report
+	// (not before) so a failure here still reports progress through
+	// "starting container" like any other CreateAndStart failure,
+	// matching every other error this stage can produce.
+	if err := EnsureImageAvailable(ctx, params.DockerHost, image, imageRepoHint); err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+
 	containerID, err = engine.CreateAndStart(ctx, params.DockerHost, engine.CreateSpec{
 		InstanceID:  id,
 		RepoURL:     repoURL,
 		CreatedAt:   createdAt,
-		Image:       params.Image,
+		Image:       image,
 		Cmd:         cmd,
 		RepoRoot:    repoRoot,
 		WorktreeDir: worktreeDir,
@@ -382,6 +401,49 @@ func runPostCreate(ctx context.Context, dockerHost, containerID, repoRoot, workt
 		}
 	}
 	return nil
+}
+
+// resolveImage picks the image provisionContainer actually passes to
+// engine.CreateAndStart. explicitImage, when set (an explicit
+// CreateParams.Image, whether the caller typed --image or resolved
+// config supplied one) always wins verbatim — ROD-96's build path is
+// about the *default*, not about overriding a caller's own choice (see
+// this file's CreateParams.Image doc). Otherwise the repo's own
+// .claudio.yml decides: an image: section with apt/npm_global/dockerfile
+// content means this repo needs the second layer imagebuild.BuildRepoImage
+// produces, tagged deterministically from repoURL
+// (imagebuild.RepoImageTag) so create and `claudio image build --repo`
+// agree on the same tag without either having to ask the other.
+//
+// imageRepoHint is worktreeDir when the repo-specific tag was chosen (so
+// EnsureImageAvailable's error can name a concrete, working --repo path),
+// and empty when the base image was chosen or the caller supplied their
+// own image explicitly. Deliberately worktreeDir, not repoRoot: repoRoot
+// (<workspace>/repos/<slug>) is claudio's own clone root and has no
+// .claudio.yml directly at its top level (that lives inside
+// main-clone/ or a worktree) — `claudio image build --repo <repoRoot>`
+// would silently find nothing there and build only the base image,
+// which is the opposite of actionable. worktreeDir is exactly the
+// checked-out copy this function itself just read .claudio.yml from, so
+// it's guaranteed to work.
+func resolveImage(repoURL, worktreeDir, explicitImage string) (image, imageRepoHint string, err error) {
+	if explicitImage != "" {
+		return explicitImage, "", nil
+	}
+
+	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
+	if err != nil {
+		return "", "", coreerr.Wrap(coreerr.InvalidInput, "resolve image", err)
+	}
+	if !imagebuild.NeedsRepoImage(repoCfg.Image) {
+		return imagebuild.BaseImage, "", nil
+	}
+
+	tag, err := imagebuild.RepoImageTag(repoURL)
+	if err != nil {
+		return "", "", coreerr.Wrap(coreerr.InvalidInput, "resolve image", err)
+	}
+	return tag, worktreeDir, nil
 }
 
 // resolvedPort is portdetect.Resolved plus the host port AllocatePort

@@ -60,9 +60,11 @@ func (l *Local) resolveCreateParams(params core.CreateParams) (core.CreateParams
 	params.DockerHost = l.global.Runtime.DockerHost
 	params.PortRangeLow = l.global.Ports.Range[0]
 	params.PortRangeHigh = l.global.Ports.Range[1]
-	if params.Image == "" {
-		params.Image = "claudio/base:latest"
-	}
+	// params.Image is deliberately left as-is here (empty unless the
+	// caller set one explicitly, e.g. --image or a resolved-config
+	// value): core.resolveImage picks the actual default (base vs. a
+	// repo-specific tag) once the worktree's .claudio.yml is readable,
+	// which resolveCreateParams runs before — ROD-96.
 	if params.Resources == (engine.ResourceLimits{}) {
 		mem, err := engine.ParseMemory(derefStr(l.global.Resources.Memory))
 		if err != nil {
@@ -124,6 +126,11 @@ func (l *Local) AddPort(ctx context.Context, idOrName string, containerPort int)
 
 func (l *Local) RemovePort(ctx context.Context, idOrName string, containerPort int) error {
 	return core.RemovePort(ctx, l.store, idOrName, containerPort)
+}
+
+func (l *Local) BuildImage(ctx context.Context, params core.BuildImageParams, progress func(string)) (core.BuildImageResult, error) {
+	params.DockerHost = l.global.Runtime.DockerHost
+	return core.BuildImage(ctx, params, progress)
 }
 
 func (l *Local) DockerHost() string {
