@@ -26,21 +26,26 @@ const (
 	StepFailed      ProvisionStep = "failed"
 )
 
+// Instance is tagged for JSON per docs/architecture.md §12.4's interface
+// discipline (phase 2's HTTP layer serializes this verbatim), using
+// snake_case to match the SQLite column names and the rest of the wire
+// surface (config.yml is snake_case throughout — see internal/config's
+// package doc).
 type Instance struct {
-	ID             string
-	Name           *string
-	RepoURL        string
-	RepoRoot       string
-	WorktreeDir    string
-	Branch         string
-	CommitSHA      *string
-	Image          string
-	ContainerID    *string
-	RuntimeProfile string
-	DesiredState   DesiredState
-	ProvisionStep  ProvisionStep
-	CreatedAt      int64
-	LastActive     int64
+	ID             string        `json:"id"`
+	Name           *string       `json:"name,omitempty"`
+	RepoURL        string        `json:"repo_url"`
+	RepoRoot       string        `json:"repo_root"`
+	WorktreeDir    string        `json:"worktree_dir"`
+	Branch         string        `json:"branch"`
+	CommitSHA      *string       `json:"commit_sha,omitempty"`
+	Image          string        `json:"image"`
+	ContainerID    *string       `json:"container_id,omitempty"`
+	RuntimeProfile string        `json:"runtime_profile"`
+	DesiredState   DesiredState  `json:"desired_state"`
+	ProvisionStep  ProvisionStep `json:"provision_step"`
+	CreatedAt      int64         `json:"created_at"`
+	LastActive     int64         `json:"last_active"`
 }
 
 type PortSource string
@@ -59,12 +64,12 @@ const (
 )
 
 type PortMapping struct {
-	InstanceID    string
-	ContainerPort int
-	HostPort      int
-	Protocol      string
-	ServiceName   string
-	Source        PortSource
-	DetectedFrom  *string
-	Status        PortStatus
+	InstanceID    string     `json:"instance_id"`
+	ContainerPort int        `json:"container_port"`
+	HostPort      int        `json:"host_port"`
+	Protocol      string     `json:"protocol"`
+	ServiceName   string     `json:"service_name"`
+	Source        PortSource `json:"source"`
+	DetectedFrom  *string    `json:"detected_from,omitempty"`
+	Status        PortStatus `json:"status"`
 }

@@ -24,9 +24,9 @@ type DestroyStore interface {
 // from a workspace root here — see RootFromPath's doc for why that
 // matters for a greenfield instance.
 type DestroyParams struct {
-	IDOrName      string
-	KeepWorkspace bool // docs/architecture.md: `destroy --keep-workspace` leaves the worktree on disk
-	DockerHost    string
+	IDOrName      string `json:"id_or_name"`
+	KeepWorkspace bool   `json:"keep_workspace,omitempty"` // docs/architecture.md: `destroy --keep-workspace` leaves the worktree on disk
+	DockerHost    string `json:"docker_host,omitempty"`
 }
 
 // DestroyInstance tears down one instance: removes its container (if

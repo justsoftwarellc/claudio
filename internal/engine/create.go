@@ -27,9 +27,9 @@ type PortBinding struct {
 // stays a pure Docker-facing layer — docs/architecture.md §12.4). A nil
 // field means "no limit" for that dimension, same as config.Resources.
 type ResourceLimits struct {
-	MemoryBytes int64 // 0 means unset
-	NanoCPUs    int64 // 0 means unset
-	PIDs        int64 // 0 means unset
+	MemoryBytes int64 `json:"memory_bytes,omitempty"` // 0 means unset
+	NanoCPUs    int64 `json:"nano_cpus,omitempty"`    // 0 means unset
+	PIDs        int64 `json:"pids,omitempty"`         // 0 means unset
 }
 
 // CreateSpec is everything CreateAndStart needs to provision one

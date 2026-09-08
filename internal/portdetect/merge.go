@@ -13,8 +13,8 @@ import (
 // range, and the CLI rejects a `container:host` argument outright rather
 // than accepting one it would ignore (see cmd/claudio.parseManualPorts).
 type Manual struct {
-	ServiceName string // defaults to "manual-<container>" if empty
-	Container   int
+	ServiceName string `json:"service_name,omitempty"` // defaults to "manual-<container>" if empty
+	Container   int    `json:"container"`
 }
 
 // Resolved is one port to be allocated, with its provenance intact so

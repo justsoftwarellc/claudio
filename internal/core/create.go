@@ -30,9 +30,18 @@ type CreateStore interface {
 }
 
 // CreateParams is everything `claudio create` collects from flags and
-// resolved config before any provisioning starts.
+// resolved config before any provisioning starts. Tagged for JSON per
+// docs/architecture.md §12.4: phase 2's HTTP layer serializes this as a
+// request body verbatim, so its shape on the wire is fixed here rather
+// than left to encoding/json's default (Go field name) behavior.
+// WorkspaceRoot/DockerHost/PortRangeLow/PortRangeHigh are resolved from
+// global config by client.Local today (see local.Client.
+// resolveCreateParams) rather than supplied by a caller — phase 2's
+// daemon would resolve them itself from its own config the same way, so
+// they stay tagged for completeness but a remote caller is not expected
+// to set them.
 type CreateParams struct {
-	RepoURL string
+	RepoURL string `json:"repo_url,omitempty"`
 	// GreenfieldName, when set, provisions a brand-new initiative with no
 	// upstream repo instead of cloning RepoURL — `claudio create --new
 	// <name>` (docs/architecture.md §5.1). RepoURL and Branch are ignored
@@ -43,19 +52,19 @@ type CreateParams struct {
 	// occupies its default branch and a worktree cannot also check that
 	// out (the same "one instance = one line of work" rule ROD-97
 	// verified for cloned repos).
-	GreenfieldName string
-	Branch         string // explicit --branch: check out, must already exist
-	NewBranch      string // explicit --new-branch: create from the default branch
-	Name           *string
-	ManualPorts    []portdetect.Manual
-	Env            map[string]string // credential + any extra vars, e.g. CLAUDE_CODE_OAUTH_TOKEN
-	EnvFile        string            // --env-file: host path to copy into the worktree at .claudio/env (docs/architecture.md §5.1)
-	WorkspaceRoot  string            // global config's workspace_root, already expanded
-	Image          string
-	Resources      engine.ResourceLimits
-	PortRangeLow   int
-	PortRangeHigh  int
-	DockerHost     string
+	GreenfieldName string                `json:"greenfield_name,omitempty"`
+	Branch         string                `json:"branch,omitempty"`     // explicit --branch: check out, must already exist
+	NewBranch      string                `json:"new_branch,omitempty"` // explicit --new-branch: create from the default branch
+	Name           *string               `json:"name,omitempty"`
+	ManualPorts    []portdetect.Manual   `json:"manual_ports,omitempty"`
+	Env            map[string]string     `json:"env,omitempty"`      // credential + any extra vars, e.g. CLAUDE_CODE_OAUTH_TOKEN
+	EnvFile        string                `json:"env_file,omitempty"` // --env-file: host path to copy into the worktree at .claudio/env (docs/architecture.md §5.1)
+	WorkspaceRoot  string                `json:"workspace_root,omitempty"`
+	Image          string                `json:"image,omitempty"`
+	Resources      engine.ResourceLimits `json:"resources,omitempty"`
+	PortRangeLow   int                   `json:"port_range_low,omitempty"`
+	PortRangeHigh  int                   `json:"port_range_high,omitempty"`
+	DockerHost     string                `json:"docker_host,omitempty"`
 
 	// PublishAllInterfaces is `claudio create --publish-all-interfaces`
 	// (docs/architecture.md §6.2): publish this instance's ports on every
@@ -65,7 +74,7 @@ type CreateParams struct {
 	// probe in store.AllocatePort still probes 127.0.0.1 regardless, which
 	// is the stricter of the two checks: a port bindable on all interfaces
 	// is necessarily bindable on loopback.
-	PublishAllInterfaces bool
+	PublishAllInterfaces bool `json:"publish_all_interfaces,omitempty"`
 
 	// CleanOnFail reverses the default in docs/architecture.md §4.1/
 	// ROD-99 ("FAILED preserves the workspace for inspection unless
@@ -74,16 +83,16 @@ type CreateParams struct {
 	// the user to inspect. Only applies once a worktree actually exists —
 	// a failure before that point (branch resolution, worktree creation
 	// itself) has nothing to clean up.
-	CleanOnFail bool
+	CleanOnFail bool `json:"clean_on_fail,omitempty"`
 }
 
 // CreateResult is what a caller (the CLI) needs to report success.
 type CreateResult struct {
-	InstanceID  string
-	Branch      string
-	WorktreeDir string
-	ContainerID string
-	Ports       []store.PortMapping
+	InstanceID  string              `json:"instance_id"`
+	Branch      string              `json:"branch"`
+	WorktreeDir string              `json:"worktree_dir"`
+	ContainerID string              `json:"container_id"`
+	Ports       []store.PortMapping `json:"ports,omitempty"`
 }
 
 // CreateInstance runs the full provisioning state machine from
