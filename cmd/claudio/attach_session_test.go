@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -68,6 +69,22 @@ func exitPaneShell(t *testing.T, id string) {
 	time.Sleep(1500 * time.Millisecond)
 }
 
+// fakeClaudePath prefixes a pane command so it picks up the stub below
+// instead of the real Claude Code binary.
+const fakeClaudePath = "export PATH=/tmp/fake:$PATH; "
+
+// fakeClaude installs a stub `claude` that exits with the given status,
+// so the pane command's branch on exit status can be driven both ways
+// without a credential or a real agent session. /tmp because the image
+// runs as a non-root user that cannot write to /usr/local/bin.
+func fakeClaude(t *testing.T, id string, exitCode int) {
+	t.Helper()
+	script := fmt.Sprintf("mkdir -p /tmp/fake && printf '#!/bin/sh\\nexit %d\\n' > /tmp/fake/claude && chmod +x /tmp/fake/claude", exitCode)
+	if out, err := exec.Command("docker", "exec", id, "sh", "-c", script).CombinedOutput(); err != nil {
+		t.Fatalf("install fake claude: %v: %s", err, out)
+	}
+}
+
 func tmuxLS(id string) (string, error) {
 	out, err := exec.Command("docker", "exec", id, "tmux", "ls").CombinedOutput()
 	return string(out), err
@@ -99,30 +116,39 @@ func TestBareShellPaneDiesOnExit(t *testing.T) {
 	}
 }
 
-// The fix (image/entrypoint.sh): the pane's process is a restart loop,
-// so exiting the inner shell starts another one and the session cannot
-// die. This is the property the whole issue rests on.
-func TestPaneCommandSurvivesRepeatedExits(t *testing.T) {
+// The behavior the pane command encodes: a clean exit (quitting Claude
+// Code deliberately, which exits 0) ends the session, so the user
+// returns to their host shell rather than being trapped in tmux.
+func TestPaneCommandEndsSessionOnCleanExit(t *testing.T) {
 	attachDockerAvailable(t)
 	id := runningContainer(t)
-	// `claude` needs a credential this probe container has no reason to
-	// carry, so it exits immediately here — which exercises the loop's
-	// `|| bash -l` fallback and its restart behavior in one go.
-	newSession(t, id, session.PaneCommand)
+	fakeClaude(t, id, 0)
+
+	newSession(t, id, fakeClaudePath+session.PaneCommand)
 	time.Sleep(2 * time.Second)
 
-	for i := 0; i < 3; i++ {
-		exitPaneShell(t, id)
-		out, err := tmuxLS(id)
-		if err != nil {
-			t.Fatalf("session died after exit #%d: %v: %s", i+1, err, out)
-		}
+	if _, err := tmuxLS(id); err == nil {
+		t.Error("session outlived a clean Claude Code exit; quitting must return the user to the host shell")
 	}
+}
 
-	// Crucially the pane must be *live*, not merely present: tmux's
-	// remain-on-exit would keep the session listed while leaving a dead
-	// pane the user can't type into ("Pane is dead"), which is a worse
-	// dead end than the original bug.
+// The other half: a nonzero exit — a crash, a bad credential — must
+// leave the session standing with a usable shell, so there is something
+// to attach to and debug rather than an instance that silently vanished.
+func TestPaneCommandKeepsSessionOnFailure(t *testing.T) {
+	attachDockerAvailable(t)
+	id := runningContainer(t)
+	fakeClaude(t, id, 1)
+
+	newSession(t, id, fakeClaudePath+session.PaneCommand)
+	time.Sleep(2 * time.Second)
+
+	out, err := tmuxLS(id)
+	if err != nil {
+		t.Fatalf("session should survive a failed Claude Code start: %v: %s", err, out)
+	}
+	// Alive is not enough — it must be a pane the user can actually type
+	// into. tmux's remain-on-exit was rejected for leaving a *dead* pane.
 	if got := paneField(t, id, "#{pane_dead}"); got != "0" {
 		t.Errorf("pane_dead = %q, want %q — a dead pane strands an attached user", got, "0")
 	}
@@ -131,8 +157,8 @@ func TestPaneCommandSurvivesRepeatedExits(t *testing.T) {
 // The user-visible half: a session recreated by attach must come back
 // running Claude Code, not a bare container shell. Asserted on the
 // command attach passes rather than on the TUI itself, since `claude`
-// needs a credential; TestPaneCommandSurvivesRepeatedExits covers that
-// the same command stays alive.
+// needs a credential; TestPaneCommandKeepsSessionOnFailure covers what
+// the same command does when it can't start.
 func TestRecreatedSessionRunsTheAgent(t *testing.T) {
 	attachDockerAvailable(t)
 	id := runningContainer(t)
@@ -141,9 +167,14 @@ func TestRecreatedSessionRunsTheAgent(t *testing.T) {
 		t.Fatalf("PaneCommand = %q, want it to launch claude — a recreated session must not drop the user at a shell", session.PaneCommand)
 	}
 
+	// A failing stub keeps the pane on the fallback shell, so the
+	// assertion is about the recreated session existing and being usable,
+	// not about how long a real agent happens to stay up.
+	fakeClaude(t, id, 1)
+
 	// -A creates the session because none exists, applying the command.
 	out, err := exec.Command("docker", "exec", id, "tmux", "new-session", "-A", "-d",
-		"-s", session.SessionName, "-c", "/tmp", session.PaneCommand).CombinedOutput()
+		"-s", session.SessionName, "-c", "/tmp", fakeClaudePath+session.PaneCommand).CombinedOutput()
 	if err != nil {
 		t.Fatalf("new-session -A: %v: %s", err, out)
 	}
@@ -167,8 +198,9 @@ func TestNewSessionACreatesAMissingSession(t *testing.T) {
 		t.Fatal("precondition: `tmux attach -t` should fail when the session is gone")
 	}
 
+	fakeClaude(t, id, 1)
 	if out, err := exec.Command("docker", "exec", id, "tmux", "new-session", "-A", "-d",
-		"-s", session.SessionName, "-c", "/tmp", session.PaneCommand).CombinedOutput(); err != nil {
+		"-s", session.SessionName, "-c", "/tmp", fakeClaudePath+session.PaneCommand).CombinedOutput(); err != nil {
 		t.Fatalf("new-session -A should recreate the missing session: %v: %s", err, out)
 	}
 
@@ -184,7 +216,8 @@ func TestNewSessionACreatesAMissingSession(t *testing.T) {
 func TestNewSessionAReusesAnExistingSession(t *testing.T) {
 	attachDockerAvailable(t)
 	id := runningContainer(t)
-	newSession(t, id, session.PaneCommand)
+	fakeClaude(t, id, 1)
+	newSession(t, id, fakeClaudePath+session.PaneCommand)
 	time.Sleep(1500 * time.Millisecond)
 
 	before, err := exec.Command("docker", "exec", id, "tmux",
@@ -201,7 +234,7 @@ func TestNewSessionAReusesAnExistingSession(t *testing.T) {
 	// Killing the client detaches; the session must survive it.
 	attach := exec.Command("script", "-q", "/dev/null",
 		"docker", "exec", "-it", id, "tmux", "new-session", "-A",
-		"-s", session.SessionName, "-c", "/tmp", session.PaneCommand)
+		"-s", session.SessionName, "-c", "/tmp", fakeClaudePath+session.PaneCommand)
 	if err := attach.Start(); err != nil {
 		t.Fatalf("attach: %v", err)
 	}

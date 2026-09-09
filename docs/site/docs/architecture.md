@@ -444,11 +444,15 @@ Claude Code runs inside tmux rather than as PID 1 so that:
 - The session survives a client disconnect (SSH drop, laptop sleep, terminal close).
 - Scrollback is preserved and greppable.
 
-The pane runs Claude Code in a restart loop — `while true; do claude || bash -l; done` — rather than as a one-shot command (ROD-116). The pane's process is the session's only process, and tmux destroys the session — and with it the whole server, this being the only session — as soon as that process exits. That made an ordinary Ctrl-C sequence destructive: Claude Code quits on a double Ctrl-C, leaving a bare shell, and one further Ctrl-C or Ctrl-D exits it. The container stayed `Up` throughout (the entrypoint's `tail -f` is what holds it open, not tmux), so `claudio ls` kept reporting a healthy instance that `claudio attach` could no longer reach.
+The pane runs `while true; do claude && break; bash -l; done` rather than `claude` alone (ROD-116). The pane's process is the session's only process, so its exit status decides the session's fate — which is exactly the control wanted.
 
-Looping means the pane's process never exits at all: leaving Claude Code simply starts it again, and the user lands back at the TUI rather than anywhere broken. `|| bash -l` is the escape hatch — if `claude` cannot start (a bad credential, say), the user gets a usable shell to debug in instead of a tight crash loop, and exiting that shell retries.
+Quitting Claude Code deliberately (a double Ctrl-C, which exits 0) breaks the loop, so the pane exits, tmux tears the session down, the `docker exec` behind `claudio attach` returns, and the user lands back on their **host** shell. That is what "closing a session" should mean, and it is why the loop is conditional.
 
-tmux's `remain-on-exit` was tried first and rejected: it keeps the session listed but leaves a *dead* pane, so a user who exits while attached is stranded looking at "Pane is dead" with no way to type — a worse dead end than the bug it fixed. A `pane-died` hook that respawns automatically would be the direct equivalent, but does not fire reliably on the tmux 3.3a this image ships.
+A nonzero exit — a crash, a bad credential — falls through to an interactive shell instead. The session stays up with a pane the user can type into, so a broken instance is something to attach to and debug rather than one that silently disappeared; leaving that shell retries Claude Code.
+
+The original bug was the unguarded version of this: with a bare shell as the pane's process, exiting it destroyed the session and, this being the only session, the whole tmux server. The container stayed `Up` regardless (the entrypoint's `tail -f` holds it open, not tmux), so `claudio ls` kept reporting a healthy instance that `claudio attach` could no longer reach.
+
+Two alternatives were tried and rejected. `remain-on-exit on` keeps the session but leaves a *dead* pane, stranding a user who quits while attached on "Pane is dead" with no way to type — worse than the bug it fixed. An unconditional `while true; do claude || bash -l; done` relaunches Claude Code the instant it is quit, so there is no way out of the session at all.
 
 ### 7.3 Fast provisioning
 
