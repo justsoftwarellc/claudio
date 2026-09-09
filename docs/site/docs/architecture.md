@@ -519,7 +519,19 @@ The recreate path passes the same pane command the entrypoint uses (`session.Pan
 
 The CLI does *not* proxy this through the daemon. Inserting a daemon hop between two TTYs adds latency and breaks window-resize propagation for no benefit.
 
-### 9.2 Non-interactive control
+### 9.2 Rebuilding an instance onto a new image
+
+`claudio rebuild <id> [--fresh]` builds the image, then re-provisions the instance's container from it — `claudio image build` followed by `claudio restart`, as one verb.
+
+It exists because a change to the image — `image/entrypoint.sh` most of all — reaches a running instance through neither of the routes an operator reaches for first. Rebuilding the CLI does nothing, since the entrypoint ships in the image rather than the binary. `claudio restart` re-provisions from whatever image is tagged *now*, but never rebuilds it, so a stale tag is faithfully reused. Both commands report success, and the instance keeps running the old entrypoint.
+
+That failure is silent, which is what makes it worth a command: `claudio ls` shows a healthy instance, the CLI is current, and nothing anywhere says the container predates the image. The fix was found only by comparing image IDs by hand (ROD-116). Pairing the two steps in one verb means the operator does not have to know the pairing to get it right.
+
+The summary line reports the drift the rebuild closed (`Image 4e1269969011 -> 98e847299a9f`), and says so explicitly when the image did *not* change — distinguishing "the fix isn't in the image" from "the fix is in, look elsewhere" is the whole diagnostic value.
+
+`--fresh` discards `home/` exactly as it does for `start`/`restart`; the default resumes the existing session (§4.1).
+
+### 9.3 Non-interactive control
 
 For scripting and the web UI, the daemon exposes:
 
@@ -533,7 +545,7 @@ claudio exec <id> -- <cmd>                 # one-off command in the container
 
 `send` writes to the tmux pane via `tmux send-keys`, which is how the session receives input regardless of whether a human is attached.
 
-### 9.3 Activity and attention
+### 9.4 Activity and attention
 
 The most valuable signal in a multi-agent setup is *which session needs me*. State comes from **Claude Code hooks**, not from screen-scraping — pattern-matching `tmux capture-pane` output would break whenever the TUI changes, whereas hooks are a supported interface.
 
@@ -562,7 +574,7 @@ wise-heron   docs          fix/links     running  awaiting prompt   43004
 calm-finch   perf-audit    main          running  working           43003
 ```
 
-### 9.4 Web UI (optional, phase 2)
+### 9.5 Web UI (optional, phase 2)
 
 The daemon serves an HTTP + WebSocket endpoint. The UI is a dashboard of instance cards (status, attention, port links) with an embedded `xterm.js` terminal per instance, bridged to the same tmux session over a WebSocket. Port links are clickable, opening the forwarded `127.0.0.1:PORT` directly.
 
@@ -670,6 +682,9 @@ claudio logs <id> [--service X] [--follow]
                                          # straight into `docker logs`/`docker compose logs`.
 claudio ports <id> [--add c] [--remove c]
 claudio stop|start|restart <id> [--fresh]
+claudio rebuild <id> [--fresh]           # rebuild the image, then recreate the container
+                                         # from it — the one path that carries a changed
+                                         # image/entrypoint.sh into a running instance
 claudio destroy <id> [--keep-workspace]
 claudio cd <id>                          # prints the workspace path (shell fn wraps it)
 claudio adopt <container>                # reconcile an untracked container
@@ -820,7 +835,7 @@ The same applies to `docker-compose.yml`: a repo that ships one has already decl
 
 ### 12.5 CLI-first, daemon-ready
 
-Phase 1 ships **no daemon**. A daemon earns its place with the reconciler (§10.1), the port proxies (§6.3), and the activity monitor (§9.3) — all phase 2+. Building one for phase 1 would mean a serialization round-trip to reach code in the same address space.
+Phase 1 ships **no daemon**. A daemon earns its place with the reconciler (§10.1), the port proxies (§6.3), and the activity monitor (§9.4) — all phase 2+. Building one for phase 1 would mean a serialization round-trip to reach code in the same address space.
 
 The layering is what keeps that a deferral rather than a rewrite:
 

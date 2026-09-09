@@ -45,6 +45,8 @@ func run(args []string) int {
 		return cmdStart(ctx, args[1:])
 	case "restart":
 		return cmdRestart(ctx, args[1:])
+	case "rebuild":
+		return cmdRebuild(ctx, args[1:])
 	case "adopt":
 		return cmdAdopt(ctx, args[1:])
 	case "forget":
@@ -83,6 +85,7 @@ Usage:
   claudio stop <id>               remove an instance's container, keep its workspace
   claudio start <id> [--fresh]    re-provision a container for a stopped instance
   claudio restart <id> [--fresh]  stop then start (resumes the session unless --fresh)
+  claudio rebuild <id> [--fresh]  rebuild the image, then recreate the container from it
   claudio destroy <id> [--keep-workspace]
                                    remove an instance's container (and worktree)
   claudio adopt <container>       reconcile an untracked container into the store

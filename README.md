@@ -252,6 +252,8 @@ If claudio's state database is lost, rebuilt from a backup, or a container is cr
 
 **Files in the workspace are owned by the wrong user / need `sudo` to touch** — this shouldn't happen: the base image is built with `USER_UID`/`USER_GID` matched to your host user specifically to avoid it. If it does, `docker image inspect claudio/base:latest` and confirm the UID matches `id -u` on your host — a stale image built before a UID change is the most likely cause; `claudio image build` again.
 
+**A change to the image isn't showing up in a running instance** — rebuilding the `claudio` binary doesn't help: the container's entrypoint ships in the *image*, not the CLI. `claudio restart` doesn't either — it recreates the container from whatever image is tagged now, but never rebuilds it. Use `claudio rebuild <id>`, which does both and reports the image it moved between (`Image 4e1269969011 -> 98e847299a9f`), or tells you the image was already current so you can go looking elsewhere.
+
 **"no such instance"** — the ID or name doesn't match anything claudio knows about. `claudio ls --all` to see everything, including stopped instances (a destroyed instance is gone for good, not just hidden).
 
 ---

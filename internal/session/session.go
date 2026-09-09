@@ -13,7 +13,7 @@
 // that fidelity for nothing).
 //
 // SendKeys and CapturePane exist for the phase-2 daemon commands
-// docs/architecture.md §9.2 describes (`claudio send`, `claudio logs`)
+// docs/architecture.md §9.3 describes (`claudio send`, `claudio logs`)
 // — ROD-101, not yet built. There is no phase-1 caller for this package
 // today; it exists now so ROD-101 has the primitive to build on rather
 // than reinventing docker-exec-into-tmux plumbing at that point.
@@ -49,7 +49,7 @@ const SessionName = "claude"
 const PaneCommand = "while true; do claude || bash -l; done"
 
 // SendKeys injects keystrokes into the container's tmux session via
-// `tmux send-keys`, followed by Enter — docs/architecture.md §9.2: "send
+// `tmux send-keys`, followed by Enter — docs/architecture.md §9.3: "send
 // writes to the tmux pane via tmux send-keys, which is how the session
 // receives input regardless of whether a human is attached." This is
 // how a non-interactive caller (the future `claudio send`, or a daemon
@@ -73,11 +73,11 @@ func SendKeys(ctx context.Context, host, containerID, keys string) error {
 }
 
 // CapturePane returns the tmux pane's current visible content via `tmux
-// capture-pane -p` — the mechanism docs/architecture.md §9.3 explicitly
+// capture-pane -p` — the mechanism docs/architecture.md §9.4 explicitly
 // rules out as the *primary* activity signal ("pattern-matching tmux
 // capture-pane output would break whenever the TUI changes, whereas
 // hooks are a supported interface") but keeps as a real, useful
-// operation in its own right: `claudio logs` (§9.2) has nothing else to
+// operation in its own right: `claudio logs` (§9.3) has nothing else to
 // stream from a tmux-hosted session, hooks give attention state, not
 // transcript content.
 func CapturePane(ctx context.Context, host, containerID string) (string, error) {
