@@ -291,16 +291,49 @@ func relativizeGitdir(root Root, id string) error {
 // the working tree location") once it has been relativized for the
 // container boundary (relativizeGitdir). That is safe to do here because
 // removal always runs on the host, where the absolute path is valid.
+//
+// This is idempotent, and deliberately so (ROD-121): DestroyInstance
+// removes the container before the worktree, so an error here strands an
+// instance with no container that no subsequent destroy can clear. Each
+// half of a worktree — git's administrative directory and the working
+// tree itself — may already be gone, and neither absence is a failure:
+//
+//   - The admin dir is pruned by git on its own; removing a repo's last
+//     worktree takes the whole .git/worktrees directory with it. Writing
+//     the reverse pointer into a parent that no longer exists was the
+//     original bug.
+//   - Once the admin dir is gone git disowns the working tree entirely
+//     ("is not a working tree"), so `worktree remove` cannot clean up the
+//     leftover directory and this has to remove it directly.
 func RemoveWorktree(ctx context.Context, root Root, id string) error {
-	reverseGitdirFile := filepath.Join(root.MainClone, ".git", "worktrees", id, "gitdir")
-	absPointer := filepath.Join(root.Worktrees, id, ".git") + "\n"
-	if err := os.WriteFile(reverseGitdirFile, []byte(absPointer), 0o644); err != nil {
-		return fmt.Errorf("repo: restore absolute gitdir for %s: %w", id, err)
+	adminDir := filepath.Join(root.MainClone, ".git", "worktrees", id)
+	worktreeDir := filepath.Join(root.Worktrees, id)
+
+	_, adminErr := os.Stat(adminDir)
+	adminExists := adminErr == nil
+	if adminErr != nil && !os.IsNotExist(adminErr) {
+		return fmt.Errorf("repo: stat worktree admin dir for %s: %w", id, adminErr)
 	}
 
-	if _, err := runGit(ctx, root.MainClone, "worktree", "remove", "--force", filepath.Join(root.Worktrees, id)); err != nil {
-		return fmt.Errorf("repo: remove worktree %s: %w", id, err)
+	if adminExists {
+		absPointer := filepath.Join(worktreeDir, ".git") + "\n"
+		if err := os.WriteFile(filepath.Join(adminDir, "gitdir"), []byte(absPointer), 0o644); err != nil {
+			return fmt.Errorf("repo: restore absolute gitdir for %s: %w", id, err)
+		}
+
+		if _, err := runGit(ctx, root.MainClone, "worktree", "remove", "--force", worktreeDir); err != nil {
+			return fmt.Errorf("repo: remove worktree %s: %w", id, err)
+		}
+	} else if err := os.RemoveAll(worktreeDir); err != nil {
+		// git no longer knows about this path, so nothing else will ever
+		// clean it up — and it occupies the directory a future create for
+		// the same id would want.
+		return fmt.Errorf("repo: remove orphaned worktree dir %s: %w", worktreeDir, err)
 	}
+
+	// Unconditional: this is what clears whatever administrative state is
+	// left, including after the orphan path above, and it is a no-op on a
+	// repo with nothing to prune.
 	if _, err := runGit(ctx, root.MainClone, "worktree", "prune"); err != nil {
 		return fmt.Errorf("repo: prune worktrees: %w", err)
 	}

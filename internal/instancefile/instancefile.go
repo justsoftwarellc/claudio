@@ -53,6 +53,16 @@ type file struct {
 // need to name it.
 func Load(dir string) (ids []string, path string, err error) {
 	path = filepath.Join(dir, FileName)
+
+	// A .claudio *directory* is not a pointer file: ~/.claudio is
+	// Claudio's own state dir (global config, repos, state.db), and Find
+	// walks up through $HOME on its way to the filesystem root. Reading it
+	// as a file fails with "is a directory", which would break every bare
+	// command run anywhere under $HOME.
+	if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+		return nil, "", nil
+	}
+
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, "", nil
@@ -97,7 +107,7 @@ func Find(startDir string) (dir string, ids []string, err error) {
 	}
 
 	for {
-		if _, statErr := os.Stat(filepath.Join(current, FileName)); statErr == nil {
+		if info, statErr := os.Stat(filepath.Join(current, FileName)); statErr == nil && !info.IsDir() {
 			ids, _, err := Load(current)
 			if err != nil {
 				return "", nil, err

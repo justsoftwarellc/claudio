@@ -246,6 +246,125 @@ func TestRemoveWorktree(t *testing.T) {
 	}
 }
 
+// RemoveWorktree must be idempotent: destroy removes the container
+// before the worktree, so a failure here strands an instance with no
+// container and no way to clear it — every subsequent destroy fails the
+// same way (ROD-121).
+
+// git prunes main-clone/.git/worktrees/<id> on its own (removing a
+// repo's last worktree takes the whole directory with it), which used to
+// make RemoveWorktree fail writing the reverse pointer into a parent
+// that no longer existed. git also disowns the worktree at that point,
+// so the leftover directory has to be removed directly.
+func TestRemoveWorktreeWithMissingAdminDir(t *testing.T) {
+	origin := newLocalOriginRepo(t)
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	root, err := EnsureRoot(ctx, workspace, origin)
+	if err != nil {
+		t.Fatalf("EnsureRoot: %v", err)
+	}
+	worktreeDir, err := AddWorktree(ctx, root, "brave-otter", "claudio/brave-otter", true)
+	if err != nil {
+		t.Fatalf("AddWorktree: %v", err)
+	}
+
+	adminDir := filepath.Join(root.MainClone, ".git", "worktrees", "brave-otter")
+	if err := os.RemoveAll(adminDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveWorktree(ctx, root, "brave-otter"); err != nil {
+		t.Fatalf("RemoveWorktree with a pruned admin dir: %v", err)
+	}
+	if _, err := os.Stat(worktreeDir); !os.IsNotExist(err) {
+		t.Errorf("orphaned worktree dir survived removal: %v", err)
+	}
+	if _, err := os.Stat(root.MainClone); err != nil {
+		t.Errorf("main-clone was removed, should survive: %v", err)
+	}
+}
+
+// The mirror case: administrative state intact, working tree gone from
+// disk (a user deleted it, or a previous run got half way).
+func TestRemoveWorktreeWithMissingWorktreeDir(t *testing.T) {
+	origin := newLocalOriginRepo(t)
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	root, err := EnsureRoot(ctx, workspace, origin)
+	if err != nil {
+		t.Fatalf("EnsureRoot: %v", err)
+	}
+	worktreeDir, err := AddWorktree(ctx, root, "brave-otter", "claudio/brave-otter", true)
+	if err != nil {
+		t.Fatalf("AddWorktree: %v", err)
+	}
+	if err := os.RemoveAll(worktreeDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveWorktree(ctx, root, "brave-otter"); err != nil {
+		t.Fatalf("RemoveWorktree with a missing worktree dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root.MainClone, ".git", "worktrees", "brave-otter")); !os.IsNotExist(err) {
+		t.Errorf("admin dir survived removal: %v", err)
+	}
+}
+
+// Re-running destroy after a partial failure must succeed rather than
+// report an error for work already done.
+func TestRemoveWorktreeIsIdempotent(t *testing.T) {
+	origin := newLocalOriginRepo(t)
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	root, err := EnsureRoot(ctx, workspace, origin)
+	if err != nil {
+		t.Fatalf("EnsureRoot: %v", err)
+	}
+	if _, err := AddWorktree(ctx, root, "brave-otter", "claudio/brave-otter", true); err != nil {
+		t.Fatalf("AddWorktree: %v", err)
+	}
+
+	if err := RemoveWorktree(ctx, root, "brave-otter"); err != nil {
+		t.Fatalf("first RemoveWorktree: %v", err)
+	}
+	if err := RemoveWorktree(ctx, root, "brave-otter"); err != nil {
+		t.Fatalf("second RemoveWorktree (nothing left to remove): %v", err)
+	}
+}
+
+// The originally reported sequence: destroying a repo's last worktree
+// takes .git/worktrees with it, which used to break the next destroy of
+// any other instance in that same root.
+func TestRemoveWorktreeAfterLastWorktreeRemoved(t *testing.T) {
+	origin := newLocalOriginRepo(t)
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	root, err := EnsureRoot(ctx, workspace, origin)
+	if err != nil {
+		t.Fatalf("EnsureRoot: %v", err)
+	}
+	for _, id := range []string{"first-otter", "second-otter"} {
+		if _, err := AddWorktree(ctx, root, id, "claudio/"+id, true); err != nil {
+			t.Fatalf("AddWorktree(%s): %v", id, err)
+		}
+	}
+
+	if err := RemoveWorktree(ctx, root, "first-otter"); err != nil {
+		t.Fatalf("RemoveWorktree(first-otter): %v", err)
+	}
+	if err := RemoveWorktree(ctx, root, "second-otter"); err != nil {
+		t.Fatalf("RemoveWorktree(second-otter) after the first: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root.Worktrees, "second-otter")); !os.IsNotExist(err) {
+		t.Errorf("second worktree dir survived removal: %v", err)
+	}
+}
+
 func TestInitRootGreenfield(t *testing.T) {
 	workspace := t.TempDir()
 	ctx := context.Background()

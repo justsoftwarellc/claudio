@@ -352,6 +352,72 @@ func TestAppendRespectsExistingIgnoreLine(t *testing.T) {
 	}
 }
 
+// ~/.claudio is Claudio's own state DIRECTORY (global config, repos,
+// state.db), and Find walks up through $HOME on the way to the root. A
+// directory named .claudio is not a pointer file and must be stepped
+// over silently — reading one as a file errors, which would break every
+// bare command run anywhere under $HOME.
+func TestLoadIgnoresADirectoryNamedClaudio(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, FileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, path, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load with a .claudio directory present: %v", err)
+	}
+	if path != "" || len(ids) != 0 {
+		t.Errorf("Load = (%q, %v), want it treated as no file at all", path, ids)
+	}
+}
+
+func TestFindWalksPastADirectoryNamedClaudio(t *testing.T) {
+	root := t.TempDir()
+	// Mirrors $HOME: a .claudio *directory* here, and a real pointer file
+	// in a project below it.
+	if err := os.MkdirAll(filepath.Join(root, FileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(root, "Projects", "app")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, project, "a3f9c2")
+
+	dir, ids, err := Find(project)
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	if dir != project {
+		t.Errorf("dir = %q, want the project's own file at %q", dir, project)
+	}
+	if len(ids) != 1 || ids[0] != "a3f9c2" {
+		t.Errorf("ids = %v, want [a3f9c2]", ids)
+	}
+}
+
+// Walking up from a directory whose only ancestor .claudio is a
+// directory must report "nothing found", not an error.
+func TestFindReturnsNothingWhenOnlyADirectoryNamedClaudioExists(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, FileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(root, "Projects", "app")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir, ids, err := Find(deep)
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	if dir != "" || len(ids) != 0 {
+		t.Errorf("Find = (%q, %v), want nothing found", dir, ids)
+	}
+}
+
 func mustAppend(t *testing.T, dir string, ids ...string) {
 	t.Helper()
 	for _, id := range ids {
