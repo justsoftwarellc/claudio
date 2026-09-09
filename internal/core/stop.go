@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rodrigomorales/claudio/internal/compose"
 	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/store"
@@ -34,7 +35,14 @@ func StopInstance(ctx context.Context, st StopStore, dockerHost, idOrName string
 	}
 	op := fmt.Sprintf("core: stop %s", inst.ID)
 
-	if inst.ContainerID != nil && *inst.ContainerID != "" {
+	if inst.IsCompose() {
+		// No -v: sidecar volumes survive, matching "STOPPED keeps the
+		// workspace on disk" (ROD-106's lifecycle coupling) extended to a
+		// sidecar's own data — `destroy` is the one that removes volumes.
+		if out, err := compose.Down(ctx, dockerHost, *inst.ComposeProject, composeFilesFor(inst), false); err != nil {
+			return coreerr.Wrap(coreerr.Unavailable, op+": compose down", fmt.Errorf("%w: %s", err, out))
+		}
+	} else if inst.ContainerID != nil && *inst.ContainerID != "" {
 		if err := engine.RemoveContainer(ctx, dockerHost, *inst.ContainerID); err != nil {
 			return coreerr.Wrap(coreerr.Unavailable, op+": remove container", err)
 		}

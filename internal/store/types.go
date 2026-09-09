@@ -46,6 +46,19 @@ type Instance struct {
 	ProvisionStep  ProvisionStep `json:"provision_step"`
 	CreatedAt      int64         `json:"created_at"`
 	LastActive     int64         `json:"last_active"`
+	// ComposeProject is non-nil when this instance is backed by a Docker
+	// Compose project (ROD-106) rather than a single container — its
+	// value is the `docker compose -p <value>` project name, which is
+	// also what every lifecycle command needs to drive it (up/down/ps).
+	// nil for the ordinary single-container instance.
+	ComposeProject *string `json:"compose_project,omitempty"`
+}
+
+// IsCompose reports whether this instance is a Compose project rather
+// than a single container — the condition every lifecycle command
+// (stop/start/restart/destroy) branches on.
+func (i Instance) IsCompose() bool {
+	return i.ComposeProject != nil && *i.ComposeProject != ""
 }
 
 type PortSource string

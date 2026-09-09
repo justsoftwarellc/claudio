@@ -501,10 +501,11 @@ For scripting and the web UI, the daemon exposes:
 
 ```
 claudio send <id> "run the test suite"     # inject a prompt into the session
-claudio logs <id> [--follow]               # stream captured output
 claudio status <id>                        # state, ports, health, last activity
 claudio exec <id> -- <cmd>                 # one-off command in the container
 ```
+
+`claudio logs` (§6.4, §11) ships earlier than the rest of this section: phase 1 already has it as a plain `syscall.Exec` into `docker logs`/`docker compose logs`, no daemon involved — the same "no hop between the CLI and Docker" reasoning as `attach` (§9.1). What the daemon adds later is aggregation across sessions and a stream the web UI can subscribe to without shelling out itself.
 
 `send` writes to the tmux pane via `tmux send-keys`, which is how the session receives input regardless of whether a human is attached.
 
@@ -637,6 +638,12 @@ claudio create <repo> [--branch B | --new-branch B] [--name N] [--env-file F] [-
 claudio ls [--all] [--json]
 claudio attach <id>
 claudio status <id>
+claudio logs <id> [--service X] [--follow]
+                                         # single-container: streams its container's own
+                                         # logs; compose instance: --service names one
+                                         # sidecar (or the agent), omitted means every
+                                         # service interleaved. No daemon needed — execs
+                                         # straight into `docker logs`/`docker compose logs`.
 claudio ports <id> [--add c] [--remove c]
 claudio stop|start|restart <id> [--fresh]
 claudio destroy <id> [--keep-workspace]
@@ -648,7 +655,6 @@ claudio image build [--repo <path>]      # build claudio/base:latest, plus a rep
 
 # phase 2+
 claudio send <id> <prompt>
-claudio logs <id> [--follow] [--service claude|supervisor]
 claudio open <id> [--service web]
 claudio exec <id> -- <cmd...>
 claudio gc

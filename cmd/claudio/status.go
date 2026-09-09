@@ -38,5 +38,23 @@ func cmdStatus(ctx context.Context, args []string) int {
 		fmt.Printf("Container: %s\n", shortID(*inst.ContainerID))
 	}
 	fmt.Printf("Ports:     %s\n", portsOf(inst))
+	if inst.IsCompose() {
+		fmt.Printf("Compose:   %s\n", *inst.ComposeProject)
+		if len(inst.Sidecars) == 0 {
+			fmt.Println("Sidecars:  (none reported)")
+		} else {
+			for i, s := range inst.Sidecars {
+				label := "Sidecars:  "
+				if i > 0 {
+					label = "           "
+				}
+				state := s.State
+				if s.Health != "" {
+					state = fmt.Sprintf("%s (%s)", s.State, s.Health)
+				}
+				fmt.Printf("%s%s: %s\n", label, s.Service, state)
+			}
+		}
+	}
 	return 0
 }

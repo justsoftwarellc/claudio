@@ -27,6 +27,7 @@ type CreateStore interface {
 	TransitionProvisionStep(ctx context.Context, instanceID string, step store.ProvisionStep) error
 	MarkFailed(ctx context.Context, instanceID string) error
 	SetContainerID(ctx context.Context, instanceID, containerID string) error
+	SetComposeProject(ctx context.Context, instanceID, project string) error
 	AllocatePort(ctx context.Context, instanceID string, containerPort int, serviceName string, source store.PortSource, detectedFrom *string, rangeLow, rangeHigh int) (int, error)
 	UpsertRepo(ctx context.Context, rootPath, repoURL string) error
 }
@@ -54,15 +55,15 @@ type CreateParams struct {
 	// occupies its default branch and a worktree cannot also check that
 	// out (the same "one instance = one line of work" rule ROD-97
 	// verified for cloned repos).
-	GreenfieldName string                `json:"greenfield_name,omitempty"`
-	Branch         string                `json:"branch,omitempty"`     // explicit --branch: check out, must already exist
-	NewBranch      string                `json:"new_branch,omitempty"` // explicit --new-branch: create from the default branch
-	Name           *string               `json:"name,omitempty"`
-	ManualPorts    []portdetect.Manual   `json:"manual_ports,omitempty"`
-	Env            map[string]string     `json:"env,omitempty"`      // credential + any extra vars, e.g. CLAUDE_CODE_OAUTH_TOKEN
-	EnvFile        string                `json:"env_file,omitempty"` // --env-file: host path to copy into the worktree at .claudio/env (docs/architecture.md §5.1)
-	WorkspaceRoot  string                `json:"workspace_root,omitempty"`
-	Image          string                `json:"image,omitempty"`
+	GreenfieldName string              `json:"greenfield_name,omitempty"`
+	Branch         string              `json:"branch,omitempty"`     // explicit --branch: check out, must already exist
+	NewBranch      string              `json:"new_branch,omitempty"` // explicit --new-branch: create from the default branch
+	Name           *string             `json:"name,omitempty"`
+	ManualPorts    []portdetect.Manual `json:"manual_ports,omitempty"`
+	Env            map[string]string   `json:"env,omitempty"`      // credential + any extra vars, e.g. CLAUDE_CODE_OAUTH_TOKEN
+	EnvFile        string              `json:"env_file,omitempty"` // --env-file: host path to copy into the worktree at .claudio/env (docs/architecture.md §5.1)
+	WorkspaceRoot  string              `json:"workspace_root,omitempty"`
+	Image          string              `json:"image,omitempty"`
 	// Resources is the global-config baseline, resolved by
 	// client.Local.resolveCreateParams before CreateInstance ever runs —
 	// same "resolved ahead of time" contract as WorkspaceRoot/DockerHost
@@ -289,24 +290,11 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
 
-	ports, err = allocatePorts(ctx, st, id, worktreeDir, params)
+	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
 	if err != nil {
-		return "", nil, failAndReturn(ctx, st, id, err)
+		return "", nil, failAndReturn(ctx, st, id, coreerr.Wrap(coreerr.InvalidInput, "load repo config", err))
 	}
-	if err := st.TransitionProvisionStep(ctx, id, store.StepPortsReady); err != nil {
-		return "", nil, failAndReturn(ctx, st, id, err)
-	}
-	reportProgress(progress, store.StepPortsReady, fmt.Sprintf("%d port(s) allocated", len(ports)))
-
-	// StepConfigReady: phase 1 has no resolved.yml materialization step of
-	// its own yet (that's the artifact docs/architecture.md §12.3
-	// describes for `claudio status`/debugging) — resolution already
-	// happened above, in memory, to build CreateParams. Advancing past
-	// this step here keeps the state machine's shape intact for when that
-	// artifact is added, without inventing a no-op file today.
-	if err := st.TransitionProvisionStep(ctx, id, store.StepConfigReady); err != nil {
-		return "", nil, failAndReturn(ctx, st, id, err)
-	}
+	composeFilePath, useCompose := needsCompose(worktreeDir, repoCfg)
 
 	// sibling of the worktree, not inside it — never checked in, never
 	// touched by git. Created here, not by Docker: unlike a named volume,
@@ -328,49 +316,111 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 	if err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
-	if overrideNote != "" {
-		reportProgress(progress, store.StepConfigReady, overrideNote)
-	}
-	if note := checkMemoryBudget(ctx, st, params.DockerHost, id, resources.MemoryBytes); note != "" {
-		reportProgress(progress, store.StepConfigReady, note)
+
+	if useCompose {
+		ports, err = allocateComposePorts(ctx, st, composeFilePath, id, params)
+		if err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+		if err := st.TransitionProvisionStep(ctx, id, store.StepPortsReady); err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+		reportProgress(progress, store.StepPortsReady, fmt.Sprintf("%d port(s) allocated", len(ports)))
+		if overrideNote != "" {
+			reportProgress(progress, store.StepPortsReady, overrideNote)
+		}
+		if note := checkMemoryBudget(ctx, st, params.DockerHost, id, resources.MemoryBytes); note != "" {
+			reportProgress(progress, store.StepPortsReady, note)
+		}
+		if err := st.TransitionProvisionStep(ctx, id, store.StepConfigReady); err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+		reportProgress(progress, store.StepConfigReady, "starting compose project")
+
+		// Checked here, right before compose.Up rather than earlier in
+		// this function — matching the single-container path's own
+		// EnsureImageAvailable placement below, so both paths fail at the
+		// same provisioning stage (right before actually starting
+		// something) rather than the compose path failing one stage
+		// earlier just because this branch runs first.
+		if err := EnsureImageAvailable(ctx, params.DockerHost, image, imageRepoHint); err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+
+		var project string
+		containerID, project, err = provisionCompose(ctx, st, composeFilePath, id, repoURL, repoRoot, worktreeDir, createdAt, params, image, cmd, resources, repoCfg, homeDir, ports)
+		if err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+		if err := st.SetContainerID(ctx, id, containerID); err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+		if err := st.SetComposeProject(ctx, id, project); err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+	} else {
+		ports, err = allocatePorts(ctx, st, id, worktreeDir, params)
+		if err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+		if err := st.TransitionProvisionStep(ctx, id, store.StepPortsReady); err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+		reportProgress(progress, store.StepPortsReady, fmt.Sprintf("%d port(s) allocated", len(ports)))
+		if overrideNote != "" {
+			reportProgress(progress, store.StepPortsReady, overrideNote)
+		}
+		if note := checkMemoryBudget(ctx, st, params.DockerHost, id, resources.MemoryBytes); note != "" {
+			reportProgress(progress, store.StepPortsReady, note)
+		}
+
+		// StepConfigReady: phase 1 has no resolved.yml materialization step
+		// of its own yet (that's the artifact docs/architecture.md §12.3
+		// describes for `claudio status`/debugging) — resolution already
+		// happened above, in memory, to build CreateParams. Advancing past
+		// this step here keeps the state machine's shape intact for when
+		// that artifact is added, without inventing a no-op file today.
+		if err := st.TransitionProvisionStep(ctx, id, store.StepConfigReady); err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+		reportProgress(progress, store.StepConfigReady, "starting container")
+
+		// Checked here, right before CreateAndStart rather than earlier in
+		// this function: this is the exact point a missing image would
+		// otherwise surface as Docker's own opaque "no such image" (or a
+		// registry pull failure) from CreateAndStart itself — see
+		// EnsureImageAvailable's doc. Placed after the StepConfigReady
+		// report (not before) so a failure here still reports progress
+		// through "starting container" like any other CreateAndStart
+		// failure, matching every other error this stage can produce.
+		if err := EnsureImageAvailable(ctx, params.DockerHost, image, imageRepoHint); err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+
+		containerID, err = engine.CreateAndStart(ctx, params.DockerHost, engine.CreateSpec{
+			InstanceID:  id,
+			RepoURL:     repoURL,
+			CreatedAt:   createdAt,
+			Image:       image,
+			Cmd:         cmd,
+			RepoRoot:    repoRoot,
+			WorktreeDir: worktreeDir,
+			HomeDir:     homeDir,
+			Ports:       toBindings(ports),
+			Resources:   resources,
+
+			PublishAllInterfaces: params.PublishAllInterfaces,
+
+			Env: params.Env,
+		})
+		if err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
+		if err := st.SetContainerID(ctx, id, containerID); err != nil {
+			return "", nil, failAndReturn(ctx, st, id, err)
+		}
 	}
 
-	reportProgress(progress, store.StepConfigReady, "starting container")
-
-	// Checked here, right before CreateAndStart rather than earlier in
-	// this function: this is the exact point a missing image would
-	// otherwise surface as Docker's own opaque "no such image" (or a
-	// registry pull failure) from CreateAndStart itself — see
-	// EnsureImageAvailable's doc. Placed after the StepConfigReady report
-	// (not before) so a failure here still reports progress through
-	// "starting container" like any other CreateAndStart failure,
-	// matching every other error this stage can produce.
-	if err := EnsureImageAvailable(ctx, params.DockerHost, image, imageRepoHint); err != nil {
-		return "", nil, failAndReturn(ctx, st, id, err)
-	}
-
-	containerID, err = engine.CreateAndStart(ctx, params.DockerHost, engine.CreateSpec{
-		InstanceID:  id,
-		RepoURL:     repoURL,
-		CreatedAt:   createdAt,
-		Image:       image,
-		Cmd:         cmd,
-		RepoRoot:    repoRoot,
-		WorktreeDir: worktreeDir,
-		HomeDir:     homeDir,
-		Ports:       toBindings(ports),
-		Resources:   resources,
-
-		PublishAllInterfaces: params.PublishAllInterfaces,
-
-		Env: params.Env,
-	})
-	if err != nil {
-		return "", nil, failAndReturn(ctx, st, id, err)
-	}
-	if err := st.SetContainerID(ctx, id, containerID); err != nil {
-		return "", nil, failAndReturn(ctx, st, id, err)
-	}
 	if err := st.TransitionProvisionStep(ctx, id, store.StepContainerUp); err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}

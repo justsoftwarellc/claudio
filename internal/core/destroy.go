@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rodrigomorales/claudio/internal/compose"
 	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/repo"
@@ -47,7 +48,17 @@ func DestroyInstance(ctx context.Context, st DestroyStore, params DestroyParams)
 	}
 	op := fmt.Sprintf("core: destroy %s", inst.ID)
 
-	if inst.ContainerID != nil && *inst.ContainerID != "" {
+	if inst.IsCompose() {
+		// -v: destroy removes sidecar volumes too (docs/architecture.md
+		// §6.4: "destroy removes the project including sidecar volumes,
+		// unless --keep-workspace") — --keep-workspace only governs the
+		// git worktree below, a database's data volume is not "the
+		// workspace" in that sense and destroy always takes it with the
+		// rest of the project.
+		if out, err := compose.Down(ctx, params.DockerHost, *inst.ComposeProject, composeFilesFor(inst), true); err != nil {
+			return coreerr.Wrap(coreerr.Unavailable, op+": compose down", fmt.Errorf("%w: %s", err, out))
+		}
+	} else if inst.ContainerID != nil && *inst.ContainerID != "" {
 		if err := engine.RemoveContainer(ctx, params.DockerHost, *inst.ContainerID); err != nil {
 			return coreerr.Wrap(coreerr.Unavailable, op+": remove container", err)
 		}

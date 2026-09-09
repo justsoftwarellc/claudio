@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rodrigomorales/claudio/internal/compose"
 	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/store"
@@ -38,6 +39,20 @@ func GetInstanceView(ctx context.Context, st StatusStore, dockerHost, idOrName s
 
 	view := InstanceView{Instance: inst, Ports: ports}
 	foundContainer := false
+
+	if inst.IsCompose() {
+		// Best-effort, like the agent container's own live-state lookup
+		// below: a compose CLI failure (e.g. the project was torn down
+		// out of band) must not fail the whole status view.
+		if states, err := compose.Ps(ctx, dockerHost, *inst.ComposeProject); err == nil {
+			for _, s := range states {
+				if s.Service == compose.AgentServiceName {
+					continue // already reported as ContainerRunning/ContainerStatus below
+				}
+				view.Sidecars = append(view.Sidecars, SidecarState{Service: s.Service, State: s.State, Health: s.Health})
+			}
+		}
+	}
 
 	if inst.ContainerID != nil && *inst.ContainerID != "" {
 		containers, err := engine.ListClaudioContainers(ctx, dockerHost, true)

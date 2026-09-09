@@ -135,6 +135,26 @@ func RemoveContainer(ctx context.Context, host, containerID string) error {
 	return nil
 }
 
+// InspectContainerIDByName resolves a container's ID from its exact
+// name (e.g. "claudio-<id>", the same claudio-<instance-id> convention
+// every path uses — docs/architecture.md §9.1) — needed by the compose
+// path (ROD-106), where `docker compose up` starts the agent container
+// but never hands this package its ID the way engine.CreateAndStart's
+// own ContainerCreate call does.
+func InspectContainerIDByName(ctx context.Context, host, name string) (string, error) {
+	cli, err := newClient(ctx, host)
+	if err != nil {
+		return "", err
+	}
+	defer cli.Close()
+
+	inspect, err := cli.ContainerInspect(ctx, name)
+	if err != nil {
+		return "", fmt.Errorf("engine: inspect %s: %w", name, err)
+	}
+	return inspect.ID, nil
+}
+
 // InspectOOMKilled reports whether a container's last exit was an OOM
 // kill, so a resource ceiling produces a legible failure rather than a
 // bare "stopped" — see ROD-112: an inexplicable stop is a worse failure

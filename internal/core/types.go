@@ -31,6 +31,27 @@ type InstanceView struct {
 	OOMKilled        bool   `json:"oom_killed"`                 // surfaced distinctly — see ROD-112: a bare "stopped" is a worse failure mode than an explained one.
 
 	Ports []store.PortMapping `json:"ports"`
+
+	// Sidecars is non-empty only for a compose-project instance
+	// (Instance.IsCompose()) — docs/architecture.md §6.4: "Sidecar
+	// health is surfaced in claudio status ... diagnosable without
+	// dropping to docker ps." Empty for an ordinary single-container
+	// instance, and best-effort for a compose instance: a failure to
+	// query compose's own state must not fail the whole status view (see
+	// GetInstanceView's doc for the same stance on the agent container's
+	// own live state).
+	Sidecars []SidecarState `json:"sidecars,omitempty"`
+}
+
+// SidecarState is one compose-project service's live state, for
+// InstanceView.Sidecars — the agent service itself is excluded (its
+// state is already ContainerRunning/ContainerStatus/OOMKilled above, so
+// a caller doesn't see the agent container described twice under two
+// different shapes).
+type SidecarState struct {
+	Service string `json:"service"`
+	State   string `json:"state"`
+	Health  string `json:"health,omitempty"`
 }
 
 // UntrackedContainer is a container carrying Claudio's labels with no

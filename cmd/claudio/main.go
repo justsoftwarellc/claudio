@@ -29,6 +29,8 @@ func run(args []string) int {
 		return cmdCreate(ctx, args[1:])
 	case "attach":
 		return cmdAttach(ctx, args[1:])
+	case "logs":
+		return cmdLogs(ctx, args[1:])
 	case "destroy":
 		return cmdDestroy(ctx, args[1:])
 	case "cd":
@@ -71,6 +73,9 @@ Usage:
                                    provision a new sandboxed session
   claudio ls [--all]              list instances (--all includes stopped ones)
   claudio attach <id>             attach to an instance's Claude Code session
+  claudio logs <id> [--service X] [--follow]
+                                   stream a container's logs (compose instances:
+                                   --service names one sidecar, or every service)
   claudio cd <id>                 print an instance's workspace path
   claudio status <id>             show one instance's detail view
   claudio ports <id> [--add c] [--remove c]

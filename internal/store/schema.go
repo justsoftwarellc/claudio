@@ -4,6 +4,7 @@ package store
 // Never edit an applied migration — append a new one instead.
 var migrations = []string{
 	migration001,
+	migration002,
 }
 
 const migration001 = `
@@ -59,4 +60,15 @@ CREATE TABLE events (
 );
 
 CREATE INDEX idx_events_instance ON events(instance_id, created_at);
+`
+
+// migration002 adds compose-project tracking (ROD-106): an instance
+// backed by a docker-compose.yml (or synthesized .claudio.yml services:)
+// is a compose *project*, not a single container, and every lifecycle
+// operation (stop/start/restart/destroy) needs to know that to run
+// `docker compose` rather than a single container remove/create. NULL
+// means "ordinary single-container instance" — the common case, and
+// every row created before this migration.
+const migration002 = `
+ALTER TABLE instances ADD COLUMN compose_project TEXT;
 `

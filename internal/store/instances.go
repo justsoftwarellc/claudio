@@ -21,7 +21,7 @@ func (s *Store) ListInstances(ctx context.Context) ([]Instance, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, repo_url, repo_root, worktree_dir, branch, commit_sha,
 		       image, container_id, runtime_profile, desired_state, provision_step,
-		       created_at, last_active
+		       created_at, last_active, compose_project
 		FROM instances ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list instances: %w", err)
@@ -33,7 +33,7 @@ func (s *Store) ListInstances(ctx context.Context) ([]Instance, error) {
 		var inst Instance
 		if err := rows.Scan(&inst.ID, &inst.Name, &inst.RepoURL, &inst.RepoRoot, &inst.WorktreeDir,
 			&inst.Branch, &inst.CommitSHA, &inst.Image, &inst.ContainerID, &inst.RuntimeProfile,
-			&inst.DesiredState, &inst.ProvisionStep, &inst.CreatedAt, &inst.LastActive); err != nil {
+			&inst.DesiredState, &inst.ProvisionStep, &inst.CreatedAt, &inst.LastActive, &inst.ComposeProject); err != nil {
 			return nil, fmt.Errorf("store: scan instance: %w", err)
 		}
 		out = append(out, inst)
@@ -102,13 +102,25 @@ func (s *Store) scanInstance(ctx context.Context, where string, args ...interfac
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, name, repo_url, repo_root, worktree_dir, branch, commit_sha,
 		       image, container_id, runtime_profile, desired_state, provision_step,
-		       created_at, last_active
+		       created_at, last_active, compose_project
 		FROM instances `+where, args...).
 		Scan(&inst.ID, &inst.Name, &inst.RepoURL, &inst.RepoRoot, &inst.WorktreeDir,
 			&inst.Branch, &inst.CommitSHA, &inst.Image, &inst.ContainerID, &inst.RuntimeProfile,
-			&inst.DesiredState, &inst.ProvisionStep, &inst.CreatedAt, &inst.LastActive)
+			&inst.DesiredState, &inst.ProvisionStep, &inst.CreatedAt, &inst.LastActive, &inst.ComposeProject)
 	if err != nil {
 		return Instance{}, err
 	}
 	return inst, nil
+}
+
+// SetComposeProject records that instance id is backed by the named
+// Docker Compose project — set once, right after CreateInstance's row is
+// inserted, when provisionContainer determines the repo needs the
+// compose path rather than a single container (ROD-106).
+func (s *Store) SetComposeProject(ctx context.Context, instanceID, project string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE instances SET compose_project = ? WHERE id = ?`, project, instanceID)
+	if err != nil {
+		return fmt.Errorf("store: set compose project for %s: %w", instanceID, err)
+	}
+	return nil
 }
