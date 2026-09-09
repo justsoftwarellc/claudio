@@ -113,6 +113,20 @@ Pass one explicitly, e.g. swift-dingo
 
 An explicit ID always wins. Two instances can't share a branch — claudio catches that and suggests a free name. `destroy` removes the ID it destroyed from `.claudio`; an ID that goes stale another way is reported and skipped, so one dead entry doesn't break the rest.
 
+### Linking an instance you already have
+
+`create .` is not the only way an instance ends up belonging to a folder. One created from a remote URL has no local source directory, an adopted one has no create-time directory at all, and anything created before this feature existed was never recorded. `claudio link` ties any of them to the directory you're standing in:
+
+```bash
+cd ~/Projects/my-app
+claudio link brave-otter    # or bare `claudio link` to pick from a list
+claudio attach              # now works with no ID
+```
+
+With no ID it lists your instances and asks which one — putting any whose repo matches the current directory first. If it's not a terminal (a script, a pipe), it prints the list and exits instead of hanging.
+
+`claudio unlink [<id>]` is the undo. It only edits `.claudio` — the instance keeps running, and unlinking the last one deletes the file.
+
 ## Cloning
 
 `claudio create <repo>` accepts `git@host:path`, `ssh://[user@]host/path`, or `https://host/path` — **not** a bare `owner/repo` shorthand. The repo is cloned once per remote URL and reused; each `create` against the same URL adds a new worktree rather than re-cloning.

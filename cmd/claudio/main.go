@@ -47,6 +47,10 @@ func run(args []string) int {
 		return cmdRestart(ctx, args[1:])
 	case "rebuild":
 		return cmdRebuild(ctx, args[1:])
+	case "link":
+		return cmdLink(ctx, args[1:])
+	case "unlink":
+		return cmdUnlink(ctx, args[1:])
 	case "adopt":
 		return cmdAdopt(ctx, args[1:])
 	case "forget":
@@ -90,6 +94,8 @@ Usage:
                                    rebuild the image, then recreate the container from it
   claudio destroy [<id>] [--keep-workspace]
                                    remove an instance's container (and worktree)
+  claudio link [<id>]             tie an existing instance to this directory
+  claudio unlink [<id>]           untie one (the instance itself is untouched)
   claudio adopt <container>       reconcile an untracked container into the store
   claudio forget <container>      remove an untracked container permanently
   claudio image build [--repo <path>]
@@ -99,6 +105,7 @@ Usage:
   claudio help                    show this message
 
 An omitted <id> is read from the nearest .claudio file — written by
-"claudio create ." — so commands run from that directory need no id.
-If the directory has several instances, pass one explicitly.`)
+"claudio create ." or "claudio link" — so commands run from that
+directory need no id. If the directory has several instances, pass
+one explicitly.`)
 }
