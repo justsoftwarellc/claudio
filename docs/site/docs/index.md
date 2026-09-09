@@ -14,7 +14,19 @@ claudio runs several [Claude Code](https://claude.ai/code) sessions in parallel,
 ```bash
 git clone <this-repo>
 cd claudio
-go build -o /usr/local/bin/claudio ./cmd/claudio
+go build -o "$(go env GOPATH)/bin/claudio" ./cmd/claudio
+```
+
+That installs to `~/go/bin` (or your `GOPATH`/`GOBIN`), which needs no `sudo`. If `claudio` isn't found afterwards, that directory isn't on your `PATH` — add it:
+
+```bash
+export PATH="$(go env GOPATH)/bin:$PATH"   # add to ~/.zshrc to make it stick
+```
+
+To install somewhere system-wide like `/usr/local/bin` instead, that path is root-owned, so the copy needs elevation:
+
+```bash
+go build -o ./claudio ./cmd/claudio && sudo mv ./claudio /usr/local/bin/claudio
 ```
 
 Then build the base image every instance runs on:
