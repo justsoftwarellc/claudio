@@ -121,3 +121,44 @@ func TestRebuildRejectsMissingCredentialBeforeBuilding(t *testing.T) {
 		t.Error("the image build started despite a missing credential; it must fail fast instead")
 	}
 }
+
+// Docker's CLI prints a "What's next: Try Docker Debug ..." promo when an
+// interactive `docker exec -it` exits. attach and logs hand Docker the
+// terminal outright (syscall.Exec), so that block lands in the user's
+// terminal looking like Claudio's own output — it named the container
+// and suggested `docker debug claudio-<id>`, which is not a Claudio
+// workflow. DOCKER_CLI_HINTS=false is Docker's opt-out.
+func TestDockerExecEnvSuppressesDockerCLIHints(t *testing.T) {
+	env := dockerExecEnv()
+	if len(env) == 0 || env[0] != "DOCKER_CLI_HINTS=false" {
+		t.Fatalf("dockerExecEnv()[0] = %q, want %q", firstOrEmpty(env), "DOCKER_CLI_HINTS=false")
+	}
+}
+
+// Prepended rather than appended, so a user who has deliberately set
+// DOCKER_CLI_HINTS keeps control: exec takes the last value for a
+// repeated key, leaving theirs in effect.
+func TestDockerExecEnvLetsAnExplicitSettingWin(t *testing.T) {
+	t.Setenv("DOCKER_CLI_HINTS", "true")
+
+	env := dockerExecEnv()
+	lastIdx, lastVal := -1, ""
+	for i, kv := range env {
+		if strings.HasPrefix(kv, "DOCKER_CLI_HINTS=") {
+			lastIdx, lastVal = i, kv
+		}
+	}
+	if lastIdx <= 0 {
+		t.Fatalf("want the user's DOCKER_CLI_HINTS after Claudio's default, got index %d", lastIdx)
+	}
+	if lastVal != "DOCKER_CLI_HINTS=true" {
+		t.Errorf("last DOCKER_CLI_HINTS = %q, want the user's own %q", lastVal, "DOCKER_CLI_HINTS=true")
+	}
+}
+
+func firstOrEmpty(s []string) string {
+	if len(s) == 0 {
+		return ""
+	}
+	return s[0]
+}

@@ -86,7 +86,7 @@ func cmdLogs(ctx context.Context, args []string) int {
 		execArgs = append(execArgs, "-f")
 	}
 
-	if err := syscall.Exec(dockerPath, execArgs, os.Environ()); err != nil {
+	if err := syscall.Exec(dockerPath, execArgs, dockerExecEnv()); err != nil {
 		fmt.Fprintln(os.Stderr, "claudio logs: exec docker:", err)
 		return 1
 	}

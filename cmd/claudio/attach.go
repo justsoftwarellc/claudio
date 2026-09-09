@@ -79,9 +79,30 @@ func cmdAttach(ctx context.Context, args []string) int {
 	// comes back running Claude Code rather than a bare container shell.
 	execArgs = append(execArgs, session.PaneCommand)
 
-	if err := syscall.Exec(dockerPath, execArgs, os.Environ()); err != nil {
+	if err := syscall.Exec(dockerPath, execArgs, dockerExecEnv()); err != nil {
 		fmt.Fprintln(os.Stderr, "claudio attach: exec docker:", err)
 		return 1
 	}
 	return 0 // unreachable: syscall.Exec only returns on error
+}
+
+// dockerExecEnv is os.Environ() with Docker's CLI hints turned off, for
+// the commands that syscall.Exec into `docker` and hand it the terminal
+// outright (attach, logs).
+//
+// On exit from an interactive `docker exec -it`, the Docker CLI prints a
+// "What's next: Try Docker Debug ..." promo. Because those commands
+// replace this process, that text lands in the user's terminal as if
+// Claudio had printed it — so quitting a Claude Code session ended with
+// an unprompted suggestion to run `docker debug claudio-<id>`, which is
+// not a Claudio workflow and reads as an error where none occurred. The
+// container name in it makes it look especially like Claudio's own
+// output.
+//
+// DOCKER_CLI_HINTS=false is Docker's documented opt-out (verified: the
+// block disappears). Prepending rather than appending leaves a user who
+// has deliberately set it to something else in control — Go's exec takes
+// the last value for a repeated key.
+func dockerExecEnv() []string {
+	return append([]string{"DOCKER_CLI_HINTS=false"}, os.Environ()...)
 }

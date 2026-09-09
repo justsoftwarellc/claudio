@@ -519,6 +519,8 @@ Execs `docker exec -it claudio-brave-otter tmux new-session -A -s claude`. The u
 
 `new-session -A` rather than `attach -t` so that attach is self-healing (ROD-116): it attaches when the session is there and creates it when it isn't. A container's tmux session can be gone while the container itself is still `Up` — tini and `tail -f` hold the container open independently of tmux — and `attach -t` in that state failed with tmux's bare "no sessions" plus Docker's generic "try docker debug" hint, a dead end mid-workflow.
 
+Both `attach` and `logs` exec with `DOCKER_CLI_HINTS=false`. On exit from an interactive `docker exec -it`, the Docker CLI prints a "What's next: Try Docker Debug ..." promo; because these commands replace the Claudio process outright, that text arrives in the user's terminal as though Claudio had printed it — quitting a session ended with an unprompted `docker debug claudio-<id>` suggestion that is not a Claudio workflow and reads as an error where none occurred. It is prepended rather than appended so a user who sets the variable themselves still wins.
+
 The recreate path passes the same pane command the entrypoint uses (`session.PaneCommand`, §7.2), so a session rebuilt by `attach` comes back running Claude Code rather than dropping the user at a bare container shell. tmux applies that command only when `-A` actually creates the session and ignores it when attaching to an existing one, so an ordinary attach is unaffected.
 
 The CLI does *not* proxy this through the daemon. Inserting a daemon hop between two TTYs adds latency and breaks window-resize propagation for no benefit.
