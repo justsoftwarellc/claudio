@@ -444,7 +444,11 @@ Claude Code runs inside tmux rather than as PID 1 so that:
 - The session survives a client disconnect (SSH drop, laptop sleep, terminal close).
 - Scrollback is preserved and greppable.
 
-The entrypoint also sets `remain-on-exit on` for the session (ROD-116). The pane's shell is the session's only process, and tmux destroys the session — and with it the whole server, this being the only session — as soon as that shell exits. That made an ordinary Ctrl-C sequence destructive: Claude Code quits on a double Ctrl-C, leaving a bare shell, and one further Ctrl-C or Ctrl-D exits it. The container stayed `Up` throughout (the entrypoint's `tail -f` is what holds it open, not tmux), so `claudio ls` kept reporting a healthy instance that `claudio attach` could no longer reach. With `remain-on-exit`, the pane is left dead instead of destroyed, the session survives, and `claudio attach` respawns the pane on its way in (§9.1).
+The pane runs Claude Code in a restart loop — `while true; do claude || bash -l; done` — rather than as a one-shot command (ROD-116). The pane's process is the session's only process, and tmux destroys the session — and with it the whole server, this being the only session — as soon as that process exits. That made an ordinary Ctrl-C sequence destructive: Claude Code quits on a double Ctrl-C, leaving a bare shell, and one further Ctrl-C or Ctrl-D exits it. The container stayed `Up` throughout (the entrypoint's `tail -f` is what holds it open, not tmux), so `claudio ls` kept reporting a healthy instance that `claudio attach` could no longer reach.
+
+Looping means the pane's process never exits at all: leaving Claude Code simply starts it again, and the user lands back at the TUI rather than anywhere broken. `|| bash -l` is the escape hatch — if `claude` cannot start (a bad credential, say), the user gets a usable shell to debug in instead of a tight crash loop, and exiting that shell retries.
+
+tmux's `remain-on-exit` was tried first and rejected: it keeps the session listed but leaves a *dead* pane, so a user who exits while attached is stranded looking at "Pane is dead" with no way to type — a worse dead end than the bug it fixed. A `pane-died` hook that respawns automatically would be the direct equivalent, but does not fire reliably on the tmux 3.3a this image ships.
 
 ### 7.3 Fast provisioning
 
@@ -509,7 +513,9 @@ $ claudio attach brave-otter
 
 Execs `docker exec -it claudio-brave-otter tmux new-session -A -s claude`. The user gets the real Claude Code TUI with full fidelity: colors, resize, Ctrl-C, the lot. Detach with the tmux prefix (`Ctrl-b d`) — the session keeps running.
 
-`new-session -A` rather than `attach -t` so that attach is self-healing (ROD-116): it attaches when the session is there and creates it when it isn't. A container's tmux session can be gone while the container itself is still `Up` — tini and `tail -f` hold the container open independently of tmux — and `attach -t` in that state failed with tmux's bare "no sessions" plus Docker's generic "try docker debug" hint, a dead end mid-workflow. Attach also respawns a dead pane on its way in (see §7.2's `remain-on-exit`); tmux refuses to respawn a pane whose process is still running, so that repair cannot disturb a healthy session.
+`new-session -A` rather than `attach -t` so that attach is self-healing (ROD-116): it attaches when the session is there and creates it when it isn't. A container's tmux session can be gone while the container itself is still `Up` — tini and `tail -f` hold the container open independently of tmux — and `attach -t` in that state failed with tmux's bare "no sessions" plus Docker's generic "try docker debug" hint, a dead end mid-workflow.
+
+The recreate path passes the same pane command the entrypoint uses (`session.PaneCommand`, §7.2), so a session rebuilt by `attach` comes back running Claude Code rather than dropping the user at a bare container shell. tmux applies that command only when `-A` actually creates the session and ignores it when attaching to an existing one, so an ordinary attach is unaffected.
 
 The CLI does *not* proxy this through the daemon. Inserting a daemon hop between two TTYs adds latency and breaks window-resize propagation for no benefit.
 

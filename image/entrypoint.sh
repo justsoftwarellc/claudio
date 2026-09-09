@@ -44,29 +44,35 @@ fi
 # at all once only /repo is mounted, and tmux new-session -c on a
 # nonexistent directory fails, taking the whole entrypoint down with it
 # under set -e.
-tmux new-session -d -s "$SESSION" -c "$PWD"
-
-# Keep the session alive when its pane's process exits (ROD-116). The
-# pane's shell is the session's only process, and tmux tears down the
-# session — and with it the entire server, since this is the only
-# session — the moment that shell exits. That made an ordinary Ctrl-C
-# sequence destructive: Claude Code quits on double Ctrl-C, leaving a
-# bare shell, and one more Ctrl-C/Ctrl-D exits that shell, taking the
-# session with it. The container stays Up regardless (the `tail -f`
-# below is what holds it open, not tmux), so `claudio ls` kept reporting
-# the instance healthy while `claudio attach` had nothing left to attach
-# to. Verified empirically: without this, `tmux ls` reports "no server
-# running" once the pane's shell exits.
+# The pane runs Claude Code in a restart loop rather than a bare shell
+# (ROD-116). The pane's process is the session's only process, and tmux
+# destroys the session — and with it the whole server, this being the
+# only session — the moment that process exits. That made an ordinary
+# Ctrl-C sequence destructive: Claude Code quits on a double Ctrl-C,
+# leaving a bare shell, and one further Ctrl-C/Ctrl-D exits it. The
+# container stays Up regardless (the `tail -f` below is what holds it
+# open, not tmux), so `claudio ls` kept reporting a healthy instance
+# that `claudio attach` could no longer reach.
 #
-# remain-on-exit leaves the pane in a dead state instead of destroying
-# it; `claudio attach` respawns a dead pane on its way in, so the user
-# gets a live shell back rather than a frozen one.
-tmux set-option -t "$SESSION" remain-on-exit on
-
-# Launch Claude Code inside the session rather than as this script's own
-# exec target — see §7.2 for why (detach semantics, multi-viewer,
-# scrollback for the future activity monitor in ROD-102).
-tmux send-keys -t "$SESSION" 'claude' C-m
+# The loop means the pane's process never exits at all: leaving the
+# inner shell just starts another one, so the user lands back at a
+# working prompt instead of anywhere broken. Preferred over tmux's
+# remain-on-exit, which keeps the session alive but leaves a *dead*
+# pane — a user who exits while attached is then stuck staring at
+# "Pane is dead" with no way to type, which is a worse dead end than
+# the bug it fixed. A `pane-died` hook that respawns automatically
+# would be the direct equivalent, but does not fire reliably on the
+# tmux 3.3a this image ships.
+#
+# The loop runs `claude` itself, not a bare shell (ROD-116): the point
+# of attaching is the Claude Code TUI, so when Claude Code exits the
+# loop starts it again rather than leaving the user at a container
+# prompt wondering where their session went. `|| bash -l` is the escape
+# hatch — if `claude` can't start (bad credential, say), the user gets a
+# usable shell to debug in instead of a tight crash loop, and exiting
+# that shell retries.
+PANE_CMD='while true; do claude || bash -l; done'
+tmux new-session -d -s "$SESSION" -c "$PWD" "$PANE_CMD"
 
 # Keep this process (tini's child) alive for as long as the tmux server
 # is running, so `docker stop` has something to signal and the container

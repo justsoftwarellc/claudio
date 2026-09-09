@@ -33,6 +33,21 @@ import (
 // container hosts exactly one agent session, never several.
 const SessionName = "claude"
 
+// PaneCommand is what the session's single pane runs — Claude Code in a
+// restart loop, with a shell as the fallback if it can't start
+// (ROD-116). It is defined here rather than only in
+// image/entrypoint.sh because `claudio attach` recreates a missing
+// session (docs/architecture.md §9.1) and must recreate it running the
+// same thing the entrypoint would have: a session respawned with a bare
+// shell would drop the user at a container prompt instead of the TUI
+// they attached for.
+//
+// The loop is what keeps the session alive at all. The pane's process
+// is the session's only process, so when it exits tmux destroys the
+// session and — this being the only session — the whole server. Looping
+// means it never exits: leaving Claude Code starts it again.
+const PaneCommand = "while true; do claude || bash -l; done"
+
 // SendKeys injects keystrokes into the container's tmux session via
 // `tmux send-keys`, followed by Enter — docs/architecture.md §9.2: "send
 // writes to the tmux pane via tmux send-keys, which is how the session
