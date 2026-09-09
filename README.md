@@ -36,6 +36,8 @@ claudio attach brave-otter   # use the ID claudio printed
 
 `create` clones the repo (once — see [Repo layout](#repo-layout)), adds a worktree, builds or reuses an image, and starts a container. `attach` drops you into the real Claude Code TUI inside it, with full color and resize support. Detach with `Ctrl-b d`; the session keeps running. `claudio ls --all` shows stopped instances too.
 
+Detaching with `Ctrl-b d` leaves the session running and is the way to step out of a session you want to come back to. You don't have to be careful about it, though: exiting the shell inside the pane — as a Ctrl-C sequence eventually does — no longer strips the instance of its session, and `attach` recreates or revives a session that has gone missing while the container is still up.
+
 ## Getting started
 
 ### First-run auth

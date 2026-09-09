@@ -46,6 +46,23 @@ fi
 # under set -e.
 tmux new-session -d -s "$SESSION" -c "$PWD"
 
+# Keep the session alive when its pane's process exits (ROD-116). The
+# pane's shell is the session's only process, and tmux tears down the
+# session — and with it the entire server, since this is the only
+# session — the moment that shell exits. That made an ordinary Ctrl-C
+# sequence destructive: Claude Code quits on double Ctrl-C, leaving a
+# bare shell, and one more Ctrl-C/Ctrl-D exits that shell, taking the
+# session with it. The container stays Up regardless (the `tail -f`
+# below is what holds it open, not tmux), so `claudio ls` kept reporting
+# the instance healthy while `claudio attach` had nothing left to attach
+# to. Verified empirically: without this, `tmux ls` reports "no server
+# running" once the pane's shell exits.
+#
+# remain-on-exit leaves the pane in a dead state instead of destroying
+# it; `claudio attach` respawns a dead pane on its way in, so the user
+# gets a live shell back rather than a frozen one.
+tmux set-option -t "$SESSION" remain-on-exit on
+
 # Launch Claude Code inside the session rather than as this script's own
 # exec target — see §7.2 for why (detach semantics, multi-viewer,
 # scrollback for the future activity monitor in ROD-102).

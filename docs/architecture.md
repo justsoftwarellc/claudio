@@ -191,7 +191,21 @@ It also makes "one instance = one line of work" **structural rather than convent
 
 The worktree is a plain host directory — openable in any editor, usable with host `git`. That is the answer to "the host needs access to the folder where the repo is cloned". The root is **configurable**, defaulting to `~/.claudio`.
 
-**Repo source: always a remote GitHub URL, cloned over SSH.** `claudio create` accepts `git@github.com:acme/web.git`, an HTTPS URL (normalized to SSH), or the `acme/web` shorthand. Local-path cloning is deliberately unsupported — it invites confusion about whether uncommitted work and local-only branches come along. The clone runs **on the host**, using the host's existing SSH setup, which is what lets the container provision without ever holding git credentials (§8).
+**Repo source: a remote GitHub URL, or a local directory.** `claudio create` accepts `git@github.com:acme/web.git`, an HTTPS URL (normalized to SSH), or the `acme/web` shorthand. The clone runs **on the host**, using the host's existing SSH setup, which is what lets the container provision without ever holding git credentials (§8).
+
+`claudio create .` (or any path-shaped argument: `.`, `..`, `./x`, `~/x`, or an absolute path) clones from a **local directory** instead, for local-only or not-yet-pushed work (ROD-115). A directory that is not yet a git repo is `git init`ed and its contents committed first, so unversioned work gets an instance without any setup ceremony.
+
+This was originally ruled out on the grounds that it "invites confusion about whether uncommitted work and local-only branches come along." Tested rather than assumed, `git clone <path>` answers that unambiguously, and the answer is the one a user would want:
+
+| | Reaches the instance? |
+|---|---|
+| Committed history | ✅ |
+| Local-only branches | ✅ as `origin/*` remote-tracking refs |
+| Uncommitted / staged work | ❌ committed history only |
+
+So an agent is never handed a half-finished edit the user has not decided to keep, and nothing has to be pushed to GitHub first. The clone is self-contained (no `.git/objects/info/alternates`), so work inside the sandbox cannot corrupt the source repo's object store, and `origin` points back at the local directory — an agent can push a finished branch straight home. A source repo that already exists is never written to: Claudio does not commit on the user's behalf there.
+
+The path check is deliberately conservative: `acme/web` stays a GitHub shorthand even when a directory by that name exists in the cwd, so adding this never silently changes what an existing command meant.
 
 **Initiatives without an upstream repo get the same structure.** `claudio create --new market-research` creates a root, `git init`s it, and works off a worktree exactly as a cloned repo does. Research, analysis, and writing are not second-class: they get the same isolation, the same real history, and the same diffable output.
 
@@ -430,6 +444,8 @@ Claude Code runs inside tmux rather than as PID 1 so that:
 - The session survives a client disconnect (SSH drop, laptop sleep, terminal close).
 - Scrollback is preserved and greppable.
 
+The entrypoint also sets `remain-on-exit on` for the session (ROD-116). The pane's shell is the session's only process, and tmux destroys the session — and with it the whole server, this being the only session — as soon as that shell exits. That made an ordinary Ctrl-C sequence destructive: Claude Code quits on a double Ctrl-C, leaving a bare shell, and one further Ctrl-C or Ctrl-D exits it. The container stayed `Up` throughout (the entrypoint's `tail -f` is what holds it open, not tmux), so `claudio ls` kept reporting a healthy instance that `claudio attach` could no longer reach. With `remain-on-exit`, the pane is left dead instead of destroyed, the session survives, and `claudio attach` respawns the pane on its way in (§9.1).
+
 ### 7.3 Fast provisioning
 
 Cloning a large monorepo per instance is slow. Mitigations:
@@ -491,7 +507,9 @@ Two placement rules matter:
 $ claudio attach brave-otter
 ```
 
-Execs `docker exec -it claudio-brave-otter tmux attach -t claude`. The user gets the real Claude Code TUI with full fidelity: colors, resize, Ctrl-C, the lot. Detach with the tmux prefix (`Ctrl-b d`) — the session keeps running.
+Execs `docker exec -it claudio-brave-otter tmux new-session -A -s claude`. The user gets the real Claude Code TUI with full fidelity: colors, resize, Ctrl-C, the lot. Detach with the tmux prefix (`Ctrl-b d`) — the session keeps running.
+
+`new-session -A` rather than `attach -t` so that attach is self-healing (ROD-116): it attaches when the session is there and creates it when it isn't. A container's tmux session can be gone while the container itself is still `Up` — tini and `tail -f` hold the container open independently of tmux — and `attach -t` in that state failed with tmux's bare "no sessions" plus Docker's generic "try docker debug" hint, a dead end mid-workflow. Attach also respawns a dead pane on its way in (see §7.2's `remain-on-exit`); tmux refuses to respawn a pane whose process is still running, so that repair cannot disturb a healthy session.
 
 The CLI does *not* proxy this through the daemon. Inserting a daemon hop between two TTYs adds latency and breaks window-resize propagation for no benefit.
 
