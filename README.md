@@ -46,6 +46,8 @@ claudio ls
 claudio attach brave-otter   # use the ID claudio printed
 ```
 
+(Working from a local directory? `claudio create .` remembers the ID for you — see [From a local directory](#from-a-local-directory).)
+
 `create` clones the repo (once — see [Repo layout](#repo-layout)), adds a worktree, builds or reuses an image, and starts a container. `attach` drops you into the real Claude Code TUI inside it, with full color and resize support. Detach with `Ctrl-b d`; the session keeps running. `claudio ls --all` shows stopped instances too.
 
 Two ways out, and they mean different things. `Ctrl-b d` **detaches**: the session keeps running, and you reattach later to find it where you left it. Quitting Claude Code itself (double `Ctrl-C`) **ends** the session and puts you back on your own shell — the instance is still there, and the next `claudio attach` starts a fresh session in it. If Claude Code ever fails to start, you get a shell inside the container instead of a closed session, so there's somewhere to debug from.
@@ -92,6 +94,25 @@ If a port claudio guessed is wrong (or a service it didn't detect needs one), co
 
 This is the actual point of the tool. `claudio ls` lists everything running (add `--all` for stopped instances too); `claudio ls --json` if you're scripting against it. Each instance is independent: its own branch, its own container, its own ports, so you can have one running a long build, another mid-review, another exploring a fix, without any of them touching each other's files.
 
+Each container hosts exactly one Claude Code session, so two streams of work means two instances. Creating a second from the same directory is normal and cheap — the clone and the image are shared; only a worktree and a container are new:
+
+```bash
+claudio create . --new-branch feat/auth
+claudio create . --new-branch feat/billing
+```
+
+When a directory has more than one, bare commands ask you to pick:
+
+```
+$ claudio attach
+claudio attach: 2 instances are tied to /Users/you/Projects/my-app:
+  swift-dingo   feat/auth     running
+  noble-walrus  feat/billing  running
+Pass one explicitly, e.g. swift-dingo
+```
+
+An explicit ID always wins. Two instances can't share a branch — claudio catches that and suggests a free name. `destroy` removes the ID it destroyed from `.claudio`; an ID that goes stale another way is reported and skipped, so one dead entry doesn't break the rest.
+
 ## Cloning
 
 `claudio create <repo>` accepts `git@host:path`, `ssh://[user@]host/path`, or `https://host/path` — **not** a bare `owner/repo` shorthand. The repo is cloned once per remote URL and reused; each `create` against the same URL adds a new worktree rather than re-cloning.
@@ -106,6 +127,17 @@ claudio create .
 ```
 
 Anything path-shaped works — `.`, `..`, `./sub`, `~/Projects/my-app`, or an absolute path. If the directory isn't a git repo yet, claudio runs `git init` and commits what's there first, so unversioned work still gets an instance.
+
+`create .` also writes a `.claudio` file recording the instance it made, so commands run from that directory (or any subdirectory) don't need the ID:
+
+```bash
+cd ~/Projects/my-app
+claudio create .
+claudio attach          # no ID needed
+claudio rebuild         # likewise
+```
+
+The file is added to `.gitignore` — the ID is local to your machine and means nothing in anyone else's store. See [Working with several instances](#working-with-several-instances) for what happens when a directory has more than one.
 
 What comes along is what's **committed**:
 
@@ -171,6 +203,8 @@ These are internal-only (reached by service name, never published to the host) �
 ## `.claudio.yml` and `config.yml`
 
 Two files, two audiences. `<repo>/.claudio.yml` is **what this project needs** — commit it, share it. `~/.claudio/config.yml` is **what this machine allows** — personal, uncommitted, applies to every instance regardless of repo.
+
+Don't confuse either with `.claudio` (no extension), which `claudio create .` writes in your working directory. That one is neither config nor shared: it just records which instance IDs belong to that folder so commands can skip the ID. It's gitignored, and deleting it costs you nothing but the convenience.
 
 `.claudio.yml` (all fields optional):
 

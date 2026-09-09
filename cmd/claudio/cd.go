@@ -13,11 +13,6 @@ import (
 // command substitution in the wrapper never captures anything but the
 // path.
 func cmdCd(ctx context.Context, args []string) int {
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "Usage: claudio cd <id>")
-		return 1
-	}
-
 	c, err := newClient(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio cd:", describeErr(err))
@@ -25,7 +20,12 @@ func cmdCd(ctx context.Context, args []string) int {
 	}
 	defer c.Close()
 
-	inst, err := c.GetInstance(ctx, args[0])
+	idOrName, ok := resolveIDWithClient(ctx, c, args, "claudio cd")
+	if !ok {
+		return 1
+	}
+
+	inst, err := c.GetInstance(ctx, idOrName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio cd:", describeErr(err))
 		return 1

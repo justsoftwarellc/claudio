@@ -168,11 +168,18 @@ func cmdCreate(ctx context.Context, args []string) int {
 	// here, git-initializing it first if needed — ROD-115. Remote forms
 	// pass through untouched. Done before the client call so a bad path
 	// fails immediately, without generating an instance ID first.
+	// A local source is also the directory the pointer file belongs in
+	// (ROD-117): `claudio create .` ties the new instance to the folder
+	// the user is standing in, so later commands can infer its id.
+	var sourceDir string
 	if repoURL != "" {
 		resolved, err := repo.ResolveSource(ctx, repoURL)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "claudio create:", describeErr(err))
 			return 1
+		}
+		if strings.HasPrefix(resolved, "file://") {
+			sourceDir = strings.TrimPrefix(resolved, "file://")
 		}
 		repoURL = resolved
 	}
@@ -219,6 +226,11 @@ func cmdCreate(ctx context.Context, args []string) int {
 		return 1
 	}
 
+	var tiedNotice string
+	if sourceDir != "" {
+		tiedNotice = recordInstance(sourceDir, result.InstanceID)
+	}
+
 	fmt.Printf("Created %s (branch %s)\n", result.InstanceID, result.Branch)
 	fmt.Printf("Workspace: %s\n", result.WorktreeDir)
 	if len(result.Ports) > 0 {
@@ -229,6 +241,9 @@ func cmdCreate(ctx context.Context, args []string) int {
 		fmt.Printf("Ports: %s\n", strings.Join(parts, ", "))
 	}
 	fmt.Printf("Attach with: claudio attach %s\n", result.InstanceID)
+	if tiedNotice != "" {
+		fmt.Println(tiedNotice)
+	}
 	return 0
 }
 

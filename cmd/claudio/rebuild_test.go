@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -45,19 +46,26 @@ func TestContainerImageIDReturnsEmptyForUnknownContainer(t *testing.T) {
 // pinning here is that it accepts exactly the same forms under its own
 // name — including rejecting a stray flag rather than silently treating
 // it as an instance ID.
+//
+// Since ROD-117 the id is optional and this only separates flags from
+// positionals: no args is now a valid call (the id comes from the
+// .claudio file), and how many positionals are acceptable is
+// resolveInstanceID's rule to enforce, not this function's.
 func TestRebuildFlagParsing(t *testing.T) {
 	cases := []struct {
 		name      string
 		args      []string
-		wantID    string
+		wantRest  []string
 		wantFresh bool
 		wantOK    bool
 	}{
-		{"id only", []string{"jolly-badger"}, "jolly-badger", false, true},
-		{"id with --fresh", []string{"jolly-badger", "--fresh"}, "jolly-badger", true, true},
-		{"no args", []string{}, "", false, false},
-		{"unknown flag", []string{"jolly-badger", "--force"}, "", false, false},
-		{"too many args", []string{"a", "--fresh", "b"}, "", false, false},
+		{"id only", []string{"jolly-badger"}, []string{"jolly-badger"}, false, true},
+		{"id with --fresh", []string{"jolly-badger", "--fresh"}, []string{"jolly-badger"}, true, true},
+		{"--fresh before id", []string{"--fresh", "jolly-badger"}, []string{"jolly-badger"}, true, true},
+		{"no args", []string{}, nil, false, true},
+		{"--fresh alone", []string{"--fresh"}, nil, true, true},
+		{"unknown flag", []string{"jolly-badger", "--force"}, nil, false, false},
+		{"two positionals pass through", []string{"a", "--fresh", "b"}, []string{"a", "b"}, true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -67,13 +75,13 @@ func TestRebuildFlagParsing(t *testing.T) {
 			}
 			defer devNull.Close()
 			stderr := os.Stderr
-			os.Stderr = devNull // parseIDAndFresh prints usage on the failure paths
-			id, fresh, ok := parseIDAndFresh(tc.args, "claudio rebuild")
+			os.Stderr = devNull // parseIDAndFresh prints its error on the failure path
+			rest, fresh, ok := parseIDAndFresh(tc.args, "claudio rebuild")
 			os.Stderr = stderr
 
-			if ok != tc.wantOK || id != tc.wantID || fresh != tc.wantFresh {
+			if ok != tc.wantOK || fresh != tc.wantFresh || !slices.Equal(rest, tc.wantRest) {
 				t.Errorf("parseIDAndFresh(%q) = (%q, %v, %v), want (%q, %v, %v)",
-					tc.args, id, fresh, ok, tc.wantID, tc.wantFresh, tc.wantOK)
+					tc.args, rest, fresh, ok, tc.wantRest, tc.wantFresh, tc.wantOK)
 			}
 		})
 	}

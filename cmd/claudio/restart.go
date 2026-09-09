@@ -11,7 +11,7 @@ import (
 // default (home/ is preserved across the container swap); --fresh
 // discards it instead — see docs/architecture.md §4.1/ROD-99, Q2.
 func cmdRestart(ctx context.Context, args []string) int {
-	idOrName, fresh, ok := parseIDAndFresh(args, "claudio restart")
+	rest, fresh, ok := parseIDAndFresh(args, "claudio restart")
 	if !ok {
 		return 1
 	}
@@ -27,6 +27,11 @@ func cmdRestart(ctx context.Context, args []string) int {
 		return 1
 	}
 	defer c.Close()
+
+	idOrName, ok := resolveIDWithClient(ctx, c, rest, "claudio restart")
+	if !ok {
+		return 1
+	}
 
 	result, err := c.Restart(ctx, idOrName, fresh, env, terminalProgress())
 	if err != nil {

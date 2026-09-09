@@ -10,10 +10,6 @@ import (
 // view — ls's ID/NAME/BRANCH/STATUS/PORTS row plus the fields ls omits
 // for space (repo URL, workspace path, container ID).
 func cmdStatus(ctx context.Context, args []string) int {
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "Usage: claudio status <id>")
-		return 1
-	}
 
 	c, err := newClient(ctx)
 	if err != nil {
@@ -22,7 +18,12 @@ func cmdStatus(ctx context.Context, args []string) int {
 	}
 	defer c.Close()
 
-	inst, err := c.Status(ctx, args[0])
+	idOrName, ok := resolveIDWithClient(ctx, c, args, "claudio status")
+	if !ok {
+		return 1
+	}
+
+	inst, err := c.Status(ctx, idOrName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio status:", describeErr(err))
 		return 1

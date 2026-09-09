@@ -21,17 +21,17 @@ import (
 // benefit. Detach with the tmux prefix (Ctrl-b d); the session keeps
 // running.
 func cmdAttach(ctx context.Context, args []string) int {
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "Usage: claudio attach <id>")
-		return 1
-	}
-
 	c, err := newClient(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio attach:", describeErr(err))
 		return 1
 	}
-	inst, err := c.GetInstance(ctx, args[0])
+	idOrName, ok := resolveIDWithClient(ctx, c, args, "claudio attach")
+	if !ok {
+		c.Close()
+		return 1
+	}
+	inst, err := c.GetInstance(ctx, idOrName)
 	if err != nil {
 		c.Close()
 		fmt.Fprintln(os.Stderr, "claudio attach:", describeErr(err))

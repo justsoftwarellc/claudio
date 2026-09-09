@@ -31,7 +31,7 @@ import (
 // the container swap, ROD-99); --fresh discards it, matching `restart`
 // and `start`.
 func cmdRebuild(ctx context.Context, args []string) int {
-	idOrName, fresh, ok := parseIDAndFresh(args, "claudio rebuild")
+	rest, fresh, ok := parseIDAndFresh(args, "claudio rebuild")
 	if !ok {
 		return 1
 	}
@@ -47,6 +47,11 @@ func cmdRebuild(ctx context.Context, args []string) int {
 		return 1
 	}
 	defer c.Close()
+
+	idOrName, ok := resolveIDWithClient(ctx, c, rest, "claudio rebuild")
+	if !ok {
+		return 1
+	}
 
 	inst, err := c.GetInstance(ctx, idOrName)
 	if err != nil {

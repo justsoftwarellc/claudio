@@ -74,19 +74,21 @@ Usage:
                         [--clean-on-fail]
                                    provision a new sandboxed session
   claudio ls [--all]              list instances (--all includes stopped ones)
-  claudio attach <id>             attach to an instance's Claude Code session
-  claudio logs <id> [--service X] [--follow]
+  claudio attach [<id>]           attach to an instance's Claude Code session
+  claudio logs [<id>] [--service X] [--follow]
                                    stream a container's logs (compose instances:
                                    --service names one sidecar, or every service)
-  claudio cd <id>                 print an instance's workspace path
-  claudio status <id>             show one instance's detail view
-  claudio ports <id> [--add c] [--remove c]
+  claudio cd [<id>]               print an instance's workspace path
+  claudio status [<id>]           show one instance's detail view
+  claudio ports [<id>] [--add c] [--remove c]
                                    show or amend an instance's port mappings
-  claudio stop <id>               remove an instance's container, keep its workspace
-  claudio start <id> [--fresh]    re-provision a container for a stopped instance
-  claudio restart <id> [--fresh]  stop then start (resumes the session unless --fresh)
-  claudio rebuild <id> [--fresh]  rebuild the image, then recreate the container from it
-  claudio destroy <id> [--keep-workspace]
+  claudio stop [<id>]             remove an instance's container, keep its workspace
+  claudio start [<id>] [--fresh]  re-provision a container for a stopped instance
+  claudio restart [<id>] [--fresh]
+                                   stop then start (resumes the session unless --fresh)
+  claudio rebuild [<id>] [--fresh]
+                                   rebuild the image, then recreate the container from it
+  claudio destroy [<id>] [--keep-workspace]
                                    remove an instance's container (and worktree)
   claudio adopt <container>       reconcile an untracked container into the store
   claudio forget <container>      remove an untracked container permanently
@@ -94,5 +96,9 @@ Usage:
                                    build claudio/base:latest (and a repo-specific
                                    layer, if --repo's .claudio.yml asks for one)
   claudio daemon status           report daemon status (phase 1: no daemon yet — see ROD-95)
-  claudio help                    show this message`)
+  claudio help                    show this message
+
+An omitted <id> is read from the nearest .claudio file — written by
+"claudio create ." — so commands run from that directory need no id.
+If the directory has several instances, pass one explicitly.`)
 }

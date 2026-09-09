@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 )
 
@@ -25,14 +26,10 @@ import (
 // case (docs/architecture.md §6.4 introduces it specifically for
 // sidecars).
 func cmdLogs(ctx context.Context, args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: claudio logs <id> [--service X] [--follow]")
-		return 1
-	}
-	id := args[0]
+	var rest []string
 	var service string
 	var follow bool
-	for i := 1; i < len(args); i++ {
+	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--service":
 			i++
@@ -44,14 +41,22 @@ func cmdLogs(ctx context.Context, args []string) int {
 		case "--follow", "-f":
 			follow = true
 		default:
-			fmt.Fprintf(os.Stderr, "claudio logs: unknown flag %q\n", args[i])
-			return 1
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(os.Stderr, "claudio logs: unknown flag %q\n", args[i])
+				return 1
+			}
+			rest = append(rest, args[i])
 		}
 	}
 
 	c, err := newClient(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio logs:", describeErr(err))
+		return 1
+	}
+	id, ok := resolveIDWithClient(ctx, c, rest, "claudio logs")
+	if !ok {
+		c.Close()
 		return 1
 	}
 	inst, err := c.GetInstance(ctx, id)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 )
 
@@ -15,15 +16,10 @@ import (
 // change a running container's published ports — so both print an
 // explicit note that the change needs `claudio restart` to take effect.
 func cmdPorts(ctx context.Context, args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: claudio ports <id> [--add container-port] [--remove container-port]")
-		return 1
-	}
-	idOrName := args[0]
-
+	var rest []string
 	var addPort, removePort int
 	var doAdd, doRemove bool
-	for i := 1; i < len(args); i++ {
+	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--add":
 			i++
@@ -50,8 +46,11 @@ func cmdPorts(ctx context.Context, args []string) int {
 			}
 			removePort, doRemove = p, true
 		default:
-			fmt.Fprintf(os.Stderr, "claudio ports: unknown flag %q\n", args[i])
-			return 1
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(os.Stderr, "claudio ports: unknown flag %q\n", args[i])
+				return 1
+			}
+			rest = append(rest, args[i])
 		}
 	}
 	if doAdd && doRemove && addPort == removePort {
@@ -65,6 +64,11 @@ func cmdPorts(ctx context.Context, args []string) int {
 		return 1
 	}
 	defer c.Close()
+
+	idOrName, ok := resolveIDWithClient(ctx, c, rest, "claudio ports")
+	if !ok {
+		return 1
+	}
 
 	if doAdd {
 		hostPort, err := c.AddPort(ctx, idOrName, addPort)
