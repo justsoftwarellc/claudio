@@ -14,7 +14,7 @@ import (
 // the concrete store type (docs/architecture.md §12.4).
 type AdoptStore interface {
 	CreateInstance(ctx context.Context, p store.NewInstanceParams) error
-	AllocatePort(ctx context.Context, instanceID string, containerPort int, serviceName string, source store.PortSource, detectedFrom *string, rangeLow, rangeHigh int) (int, error)
+	ReservePort(ctx context.Context, instanceID string, containerPort, hostPort int, serviceName string, source store.PortSource, detectedFrom *string) error
 }
 
 // AdoptContainer reconstructs a store row for a container flagged
@@ -23,13 +23,19 @@ type AdoptStore interface {
 // a deliberate user decision, never automatic, because reconstructing the
 // wrong thing risks resurrecting an instance the user meant to discard.
 //
-// containerID's ports are re-reserved via AllocatePort at each port's
+// containerID's ports are re-reserved via ReservePort at each port's
 // *current* host binding rather than picking a fresh one from the range —
 // re-allocating would change the URL a user may already have bookmarked
 // or have running in a browser tab, for a container that was working
-// fine before its row went missing. The probe inside AllocatePort will
-// simply confirm the already-bound port is reachable rather than finding
-// it "free", since the container itself is holding it.
+// fine before its row went missing.
+//
+// This deliberately does not go through AllocatePort, whose bind() probe
+// asks "is this port free?" — the wrong question here, and one that
+// always answers no: the container being adopted is itself listening on
+// the port. That mistake made every adopt of a port-publishing container
+// fail with "port range exhausted" (ROD-119). ReservePort records the
+// binding as the fact it is, while still refusing to overwrite another
+// instance's claim on the same host port.
 //
 // dockerHost identifies which daemon to inspect the container on;
 // instanceID is derived from the container's own claudio.instance.id
@@ -73,8 +79,12 @@ func AdoptContainer(ctx context.Context, st AdoptStore, dockerHost, containerID 
 		return "", coreerr.Wrap(coreerr.Unavailable, op+": inspect published ports", err)
 	}
 	for _, p := range ports {
-		if _, err := st.AllocatePort(ctx, target.InstanceID, p.ContainerPort,
-			fmt.Sprintf("port-%d", p.ContainerPort), store.PortManual, nil, p.HostPort, p.HostPort); err != nil {
+		// ReservePort, not AllocatePort: this records a binding the
+		// container already holds rather than claiming a free one, so a
+		// bind() probe would necessarily fail — the container being adopted
+		// is what is listening on the port (ROD-119).
+		if err := st.ReservePort(ctx, target.InstanceID, p.ContainerPort, p.HostPort,
+			fmt.Sprintf("port-%d", p.ContainerPort), store.PortManual, nil); err != nil {
 			return "", coreerr.Wrap(coreerr.Conflict, fmt.Sprintf("%s: re-reserve port %d", op, p.HostPort), err)
 		}
 	}

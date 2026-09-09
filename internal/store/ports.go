@@ -21,9 +21,25 @@ var ErrPortNotMapped = errors.New("store: no such port mapping")
 // two concurrent `claudio create` processes cannot land on the same port —
 // see docs/architecture.md §6.2 and §12.4 (CLI-first: N processes share
 // this store, not one daemon).
+//
+// "Free" has two meanings here and they can disagree: unreserved in the
+// store, and actually bindable on the host. reserveNextFreePort answers
+// only the first — it queries port_mappings and never consults the OS —
+// so a port held by a process Claudio has no record of passes the query
+// and fails the probe. Ports that fail the probe are therefore
+// accumulated in skip and excluded from subsequent attempts (ROD-119).
+//
+// Without that, the retry could not make progress: a failed probe
+// released its reservation, which returned the port to the pool the very
+// next query read, so every attempt re-picked the same lowest unbindable
+// port and the loop reported the whole range exhausted after burning all
+// of its attempts on one port. Two ports held at the bottom of the
+// default 43000-43999 range were enough to make every allocation on the
+// machine fail with "every host port in 43000-43999 is taken".
 func (s *Store) AllocatePort(ctx context.Context, instanceID string, containerPort int, serviceName string, source PortSource, detectedFrom *string, rangeLow, rangeHigh int) (hostPort int, err error) {
+	skip := make(map[int]bool)
 	for attempt := 0; attempt < (rangeHigh - rangeLow + 1); attempt++ {
-		hostPort, err = s.reserveNextFreePort(ctx, instanceID, containerPort, serviceName, source, detectedFrom, rangeLow, rangeHigh)
+		hostPort, err = s.reserveNextFreePort(ctx, instanceID, containerPort, serviceName, source, detectedFrom, rangeLow, rangeHigh, skip)
 		if err != nil {
 			return 0, err
 		}
@@ -33,7 +49,9 @@ func (s *Store) AllocatePort(ctx context.Context, instanceID string, containerPo
 		}
 
 		// Bind failed: something outside Claudio holds this port. Release the
-		// reservation and let the next iteration pick the next free one.
+		// reservation and exclude the port so the next iteration advances to
+		// a different one rather than re-picking this same lowest free port.
+		skip[hostPort] = true
 		if _, delErr := s.db.ExecContext(ctx,
 			`DELETE FROM port_mappings WHERE instance_id = ? AND container_port = ?`,
 			instanceID, containerPort); delErr != nil {
@@ -43,13 +61,39 @@ func (s *Store) AllocatePort(ctx context.Context, instanceID string, containerPo
 	return 0, ErrPortRangeExhausted
 }
 
+// ReservePort records a specific host port for an instance without a
+// bind() probe — for a port that is already published and in use by a
+// container Claudio is taking over (core.AdoptContainer), where the
+// binding is a fact to record rather than a claim to verify.
+//
+// AllocatePort is wrong for that case in both directions: its probe
+// necessarily fails, because the container being adopted is itself
+// listening on the port, and its retry has nowhere to advance to when
+// asked for a single-port range. That surfaced as adopt failing with
+// "port range exhausted" for a port whose only occupant was the very
+// container being adopted (ROD-119).
+//
+// A UNIQUE(host_port) violation still surfaces as an error: two
+// instances must not both claim one host port, and that a container
+// already holds it is not a reason to overwrite another instance's
+// reservation.
+func (s *Store) ReservePort(ctx context.Context, instanceID string, containerPort, hostPort int, serviceName string, source PortSource, detectedFrom *string) error {
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO port_mappings (instance_id, container_port, host_port, protocol, service_name, source, detected_from, status)
+		 VALUES (?, ?, ?, 'tcp', ?, ?, ?, 'active')`,
+		instanceID, containerPort, hostPort, serviceName, source, detectedFrom); err != nil {
+		return fmt.Errorf("store: reserve host port %d for %s: %w", hostPort, instanceID, err)
+	}
+	return nil
+}
+
 // reserveNextFreePort runs the select-then-insert as one BEGIN IMMEDIATE
 // transaction. Issuing BEGIN IMMEDIATE as a raw statement (rather than via
 // sql.TxOptions, which does not map portably to SQLite's locking modes)
 // takes the write lock up front, so a second concurrent caller blocks
 // until this transaction commits or rolls back instead of both reading
 // the same "free" port and racing on the INSERT.
-func (s *Store) reserveNextFreePort(ctx context.Context, instanceID string, containerPort int, serviceName string, source PortSource, detectedFrom *string, rangeLow, rangeHigh int) (port int, err error) {
+func (s *Store) reserveNextFreePort(ctx context.Context, instanceID string, containerPort int, serviceName string, source PortSource, detectedFrom *string, rangeLow, rangeHigh int, skip map[int]bool) (port int, err error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("store: acquire connection: %w", err)
@@ -87,7 +131,7 @@ func (s *Store) reserveNextFreePort(ctx context.Context, instanceID string, cont
 
 	candidate := 0
 	for p := rangeLow; p <= rangeHigh; p++ {
-		if !usedSet[p] {
+		if !usedSet[p] && !skip[p] {
 			candidate = p
 			break
 		}

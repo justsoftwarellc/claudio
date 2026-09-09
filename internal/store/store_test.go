@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -50,11 +52,12 @@ func TestAllocatePortAssignsFreePortAndProbes(t *testing.T) {
 	s := openTest(t)
 	insertInstance(t, s, "inst-1")
 
-	port, err := s.AllocatePort(context.Background(), "inst-1", 3000, "web", PortDetected, nil, 43000, 43010)
+	low, high := freeRange(t, 11)
+	port, err := s.AllocatePort(context.Background(), "inst-1", 3000, "web", PortDetected, nil, low, high)
 	if err != nil {
 		t.Fatalf("AllocatePort: %v", err)
 	}
-	if port < 43000 || port > 43010 {
+	if port < low || port > high {
 		t.Fatalf("port %d out of requested range", port)
 	}
 
@@ -75,6 +78,7 @@ func TestAllocatePortConcurrentNeverCollides(t *testing.T) {
 		insertInstance(t, s, idFor(i))
 	}
 
+	low, high := freeRange(t, n)
 	var wg sync.WaitGroup
 	ports := make([]int, n)
 	errs := make([]error, n)
@@ -82,7 +86,7 @@ func TestAllocatePortConcurrentNeverCollides(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ports[i], errs[i] = s.AllocatePort(context.Background(), idFor(i), 3000, "web", PortDetected, nil, 43000, 43007)
+			ports[i], errs[i] = s.AllocatePort(context.Background(), idFor(i), 3000, "web", PortDetected, nil, low, high)
 		}(i)
 	}
 	wg.Wait()
@@ -107,13 +111,134 @@ func TestAllocatePortRangeExhausted(t *testing.T) {
 	insertInstance(t, s, "a")
 	insertInstance(t, s, "b")
 
-	if _, err := s.AllocatePort(context.Background(), "a", 3000, "web", PortDetected, nil, 43000, 43000); err != nil {
+	only, _ := freeRange(t, 1)
+	if _, err := s.AllocatePort(context.Background(), "a", 3000, "web", PortDetected, nil, only, only); err != nil {
 		t.Fatalf("first allocation: %v", err)
 	}
-	_, err := s.AllocatePort(context.Background(), "b", 3000, "web", PortDetected, nil, 43000, 43000)
+	_, err := s.AllocatePort(context.Background(), "b", 3000, "web", PortDetected, nil, only, only)
 	if err != ErrPortRangeExhausted {
 		t.Fatalf("expected ErrPortRangeExhausted, got %v", err)
 	}
+}
+
+// A port that is free in the store but held by another process must be
+// skipped, not retried forever (ROD-119). The allocator used to delete
+// its failed reservation and then re-pick the same lowest store-free
+// port on every attempt, burning the whole range on one unbindable port
+// and reporting the range exhausted.
+func TestAllocatePortSkipsPortHeldByAnotherProcess(t *testing.T) {
+	s := openTest(t)
+	insertInstance(t, s, "inst-1")
+
+	// Hold the bottom of the range for real, the way an unrelated process
+	// on the machine would.
+	held, listener := listenOnFreePort(t)
+	defer listener.Close()
+
+	port, err := s.AllocatePort(context.Background(), "inst-1", 3000, "web", PortDetected, nil, held, held+5)
+	if err != nil {
+		t.Fatalf("AllocatePort with the low port held: %v", err)
+	}
+	if port == held {
+		t.Fatalf("allocated the held port %d", port)
+	}
+	if port < held || port > held+5 {
+		t.Fatalf("port %d out of requested range", port)
+	}
+}
+
+// Several consecutive held ports must all be skipped — the retry has to
+// make progress across every one of them, not just the first.
+func TestAllocatePortSkipsSeveralHeldPorts(t *testing.T) {
+	s := openTest(t)
+	insertInstance(t, s, "inst-1")
+
+	first, l1 := listenOnFreePort(t)
+	defer l1.Close()
+	l2, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", first+1))
+	if err != nil {
+		t.Skipf("could not hold %d: %v", first+1, err)
+	}
+	defer l2.Close()
+
+	port, err := s.AllocatePort(context.Background(), "inst-1", 3000, "web", PortDetected, nil, first, first+5)
+	if err != nil {
+		t.Fatalf("AllocatePort with two low ports held: %v", err)
+	}
+	if port == first || port == first+1 {
+		t.Fatalf("allocated a held port: %d", port)
+	}
+}
+
+// A range whose every port is held by another process is genuinely
+// unusable, and must be reported as exhausted rather than looping.
+func TestAllocatePortRangeFullyHeldByOtherProcesses(t *testing.T) {
+	s := openTest(t)
+	insertInstance(t, s, "inst-1")
+
+	held, listener := listenOnFreePort(t)
+	defer listener.Close()
+
+	// A one-port range consisting only of the held port.
+	_, err := s.AllocatePort(context.Background(), "inst-1", 3000, "web", PortDetected, nil, held, held)
+	if !errors.Is(err, ErrPortRangeExhausted) {
+		t.Fatalf("err = %v, want ErrPortRangeExhausted", err)
+	}
+
+	// The failed probe must not leave a reservation behind.
+	mappings, err := s.PortMappings(context.Background(), "inst-1")
+	if err != nil {
+		t.Fatalf("PortMappings: %v", err)
+	}
+	if len(mappings) != 0 {
+		t.Errorf("mappings = %+v, want none after a fully failed allocation", mappings)
+	}
+}
+
+// freeRange finds a run of n consecutive bindable ports and returns its
+// bounds. Tests must not hardcode 43000+: that is the default range
+// Claudio itself allocates from, so a developer with instances running
+// has those ports genuinely held and every hardcoded test fails on their
+// machine — which is exactly how ROD-119 stayed hidden. The ports are
+// released before returning, so this is advisory: it establishes a range
+// that was free a moment ago, not a reservation.
+func freeRange(t *testing.T, n int) (low, high int) {
+	t.Helper()
+	for attempt := 0; attempt < 20; attempt++ {
+		base, l := listenOnFreePort(t)
+		l.Close()
+
+		held := make([]net.Listener, 0, n)
+		ok := true
+		for i := 0; i < n; i++ {
+			lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", base+i))
+			if err != nil {
+				ok = false
+				break
+			}
+			held = append(held, lis)
+		}
+		for _, lis := range held {
+			lis.Close()
+		}
+		if ok {
+			return base, base + n - 1
+		}
+	}
+	t.Skipf("could not find %d consecutive free ports", n)
+	return 0, 0
+}
+
+// listenOnFreePort binds a port the OS says is free and returns it still
+// held, so a test can depend on that port being unbindable rather than on
+// whatever happens to be running on the machine.
+func listenOnFreePort(t *testing.T) (int, net.Listener) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	return l.Addr().(*net.TCPAddr).Port, l
 }
 
 func idFor(i int) string {
@@ -130,10 +255,11 @@ func TestAllocatePortRangeExhaustedIsMatchableWithErrorsIs(t *testing.T) {
 	insertInstance(t, s, "a")
 	insertInstance(t, s, "b")
 
-	if _, err := s.AllocatePort(context.Background(), "a", 3000, "web", PortDetected, nil, 43000, 43000); err != nil {
+	only, _ := freeRange(t, 1)
+	if _, err := s.AllocatePort(context.Background(), "a", 3000, "web", PortDetected, nil, only, only); err != nil {
 		t.Fatalf("first allocation: %v", err)
 	}
-	_, err := s.AllocatePort(context.Background(), "b", 3000, "web", PortDetected, nil, 43000, 43000)
+	_, err := s.AllocatePort(context.Background(), "b", 3000, "web", PortDetected, nil, only, only)
 	if !errors.Is(err, ErrPortRangeExhausted) {
 		t.Fatalf("errors.Is(%v, ErrPortRangeExhausted) = false, want true", err)
 	}
