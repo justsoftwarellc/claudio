@@ -18,7 +18,7 @@ import (
 	"github.com/rodrigomorales/claudio/internal/repo"
 )
 
-// cmdCreate implements `claudio create <repo> [--branch B | --new-branch
+// cmdCreate implements `claudio create <repo|path> [--branch B | --new-branch
 // B] [--name N] [--ports c,...] [--publish-all-interfaces] [--memory M]
 // [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes]`, plus
 // the greenfield `claudio create --new <name>` path (no upstream repo —
@@ -26,7 +26,7 @@ import (
 // comes from credentialEnv (see env.go).
 func cmdCreate(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo> [--branch B | --new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes]")
+		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo|path> [--branch B | --new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes]")
 		fmt.Fprintln(os.Stderr, "   or: claudio create --new <name> [--new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail]")
 		return 1
 	}
@@ -162,6 +162,19 @@ func cmdCreate(ctx context.Context, args []string) int {
 		if pidsSet {
 			resourceOverride.PIDs = &pids
 		}
+	}
+
+	// A local directory (`claudio create .`) becomes a file:// source
+	// here, git-initializing it first if needed — ROD-115. Remote forms
+	// pass through untouched. Done before the client call so a bad path
+	// fails immediately, without generating an instance ID first.
+	if repoURL != "" {
+		resolved, err := repo.ResolveSource(ctx, repoURL)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "claudio create:", describeErr(err))
+			return 1
+		}
+		repoURL = resolved
 	}
 
 	env, ok := credentialEnv("claudio create")

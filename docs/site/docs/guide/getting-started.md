@@ -44,6 +44,29 @@ This is the actual point of the tool. `claudio ls` lists everything running (add
 
 `claudio create <repo>` accepts `git@host:path`, `ssh://[user@]host/path`, or `https://host/path` — **not** a bare `owner/repo` shorthand. The repo is cloned once per remote URL and reused; each `create` against the same URL adds a new worktree rather than re-cloning.
 
+### From a local directory
+
+`claudio create .` clones from a directory on disk instead of a remote, for local-only or not-yet-pushed work:
+
+```bash
+cd ~/Projects/my-app
+claudio create .
+```
+
+Anything path-shaped works — `.`, `..`, `./sub`, `~/Projects/my-app`, or an absolute path. If the directory isn't a git repo yet, claudio runs `git init` and commits what's there first, so unversioned work still gets an instance.
+
+What comes along is what's **committed**:
+
+| | Reaches the instance? |
+|---|---|
+| Committed history | ✅ |
+| Local-only branches | ✅ (as `origin/*`, so `--branch` can check them out) |
+| Uncommitted / staged work | ❌ |
+
+Commit (or stash and commit) anything you want the agent to see. Your source repo is never modified — claudio doesn't commit on your behalf in a repo that already exists — and the instance's `origin` points back at your local directory, so the agent can push a finished branch straight back to it with no GitHub round-trip.
+
+Because the root is keyed by full path, two same-named repos in different directories get separate clones.
+
 For work with no upstream repo at all (a scratch analysis, a greenfield prototype), use:
 
 ```bash
