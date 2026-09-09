@@ -126,8 +126,19 @@ func TestBuildBaseTwiceIsFast(t *testing.T) {
 	second := time.Since(start)
 
 	t.Logf("first build: %s, second (cached) build: %s", first, second)
-	if second >= first {
-		t.Errorf("second base-image build (%s) was not faster than the first (%s)", second, first)
+
+	// An absolute bound, not `second < first`. When Docker's layer cache
+	// is already warm from an earlier run, the "first" build here is
+	// itself fully cached: both builds are then a couple hundred
+	// milliseconds of cache-lookup overhead, and comparing them measures
+	// scheduling noise rather than caching — the assertion failed roughly
+	// half the time on a developer machine that had built before. What the
+	// test means to catch is a second build that redoes the apt-get/npm
+	// work, which takes tens of seconds and no amount of noise reaches.
+	const cachedBuildCeiling = 10 * time.Second
+	if second > cachedBuildCeiling {
+		t.Errorf("second base-image build took %s (first: %s), over the %s ceiling — layers are not being cached",
+			second, first, cachedBuildCeiling)
 	}
 }
 

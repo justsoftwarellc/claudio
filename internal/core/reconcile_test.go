@@ -70,8 +70,9 @@ func TestReconcileFlagsInstanceStillProvisioningAsNeedingResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(actions) != 1 || actions[0].Kind != ActionResumeProvisioning || actions[0].InstanceID != "inst-1" {
-		t.Fatalf("actions = %+v, want single ResumeProvisioning for inst-1", actions)
+	mine := actionsFor(actions, "inst-1")
+	if len(mine) != 1 || mine[0].Kind != ActionResumeProvisioning {
+		t.Fatalf("actions for inst-1 = %+v, want single ResumeProvisioning (all: %+v)", mine, actions)
 	}
 }
 
@@ -86,8 +87,9 @@ func TestReconcileHealthyInstanceWithNoContainerIsMarkedStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(actions) != 1 || actions[0].Kind != ActionMarkStopped || actions[0].InstanceID != "inst-1" {
-		t.Fatalf("actions = %+v, want single MarkStopped for inst-1", actions)
+	mine := actionsFor(actions, "inst-1")
+	if len(mine) != 1 || mine[0].Kind != ActionMarkStopped {
+		t.Fatalf("actions for inst-1 = %+v, want single MarkStopped (all: %+v)", mine, actions)
 	}
 
 	if err := ApplyMarkStopped(context.Background(), s, "inst-1"); err != nil {
@@ -114,9 +116,29 @@ func TestReconcileIgnoresDestroyedInstances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(actions) != 0 {
-		t.Fatalf("actions = %+v, want none for a destroyed instance", actions)
+	if mine := actionsFor(actions, "inst-1"); len(mine) != 0 {
+		t.Fatalf("actions for inst-1 = %+v, want none for a destroyed instance", mine)
 	}
+}
+
+// actionsFor narrows Reconcile's output to one instance.
+//
+// Reconcile queries the live Docker daemon, which is shared with whatever
+// Claudio instances the developer running the tests happens to have going
+// — each of those legitimately reconciles to a flag_untracked action,
+// since this test's store knows nothing about them. Asserting on the
+// whole list therefore only passed on a machine with no instances
+// running, and the failures it produced elsewhere masked real ones
+// (ROD-119 hid behind exactly this noise). What each test here actually
+// means to pin is the action taken for the instance it created.
+func actionsFor(actions []ReconcileAction, instanceID string) []ReconcileAction {
+	var out []ReconcileAction
+	for _, a := range actions {
+		if a.InstanceID == instanceID {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func TestReconcileFlagsUntrackedContainer(t *testing.T) {
