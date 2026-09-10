@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Tests in this file build real images against a real Docker daemon —
 // this package's own verification discipline (see docs/architecture.md's
 // stance on checking infra claims empirically, not assuming them): a

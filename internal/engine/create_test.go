@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Tests in this file talk to a real Docker daemon, and so does
 // internal/core's Reconcile/AdoptContainer test suite (both scan every
 // container carrying the claudio.instance.id label — that's the whole

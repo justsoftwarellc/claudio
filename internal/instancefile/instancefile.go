@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package instancefile reads and writes the per-directory `.claudio`
 // file that ties a working directory to the instances created from it
 // (ROD-117), so `claudio attach` and friends can infer an id the user

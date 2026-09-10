@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 package engine
 
 // Label keys stamped on every container Claudio creates. Everything

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package idgen generates short, human-typeable instance identifiers —
 // "brave-otter", never a hash — per docs/architecture.md §5.2/§9's
 // identity model: the generated ID is permanent and canonical, used

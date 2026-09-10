@@ -360,6 +360,17 @@ If claudio's state database is lost, rebuilt from a backup, or a container is cr
 
 **"no such instance"** — the ID or name doesn't match anything claudio knows about. `claudio ls --all` to see everything, including stopped instances (a destroyed instance is gone for good, not just hidden).
 
+## License
+
+claudio is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) — free to use, modify, and share for any **noncommercial** purpose. Personal projects, hobby work, study and research, and use by nonprofits, schools, and government bodies are all covered.
+
+Commercial use is not covered by that license. If you want to use claudio in or for a business, [get in touch](mailto:rodrigo@rodrigomorales.co) — commercial licenses are available.
+
+Two things worth knowing:
+
+- **This is source-available, not open source.** The noncommercial restriction is incompatible with the OSI definition, so GitHub won't show a license badge and some tooling will report the license as non-standard. That's expected, not a packaging mistake — the SPDX identifier is `PolyForm-Noncommercial-1.0.0`.
+- **The software comes with no warranty and no liability**, as far as the law allows. See the *No Liability* section of the [LICENSE](LICENSE).
+
 ---
 
 See [`docs/architecture.md`](docs/architecture.md) for how claudio is built, if you're contributing rather than just using it.

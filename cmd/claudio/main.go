@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Command claudio is the CLI for the orchestrator. See
 // docs/architecture.md — this package owns ALL terminal I/O (printing,
 // exit codes, flag parsing); internal/core stays free of it so a phase-2

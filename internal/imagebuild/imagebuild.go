@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package imagebuild implements `claudio image build` (ROD-96,
 // docs/architecture.md §7.1): building the base claudio/base:latest
 // image, and generating+building a second, repo-specific layer on top of

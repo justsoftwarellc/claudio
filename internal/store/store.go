@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package store owns the SQLite-backed intent record: which instances
 // should exist, what ports they own, what repos they track. Observable
 // container state (running/exited, IPs) is never duplicated here — it is

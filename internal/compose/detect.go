@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package compose implements ROD-106's compose-sidecar path:
 // docs/architecture.md §6.4. A repo that ships a docker-compose.yml (or
 // declares services: in .claudio.yml without one) gets a per-instance

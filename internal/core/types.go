@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package core holds Claudio's actual operations. It is deliberately
 // I/O-free: no printing, no reading stdin, no os.Exit — every function
 // takes a context and typed request struct, returns a typed response

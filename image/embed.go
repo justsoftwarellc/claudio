@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package image embeds the base Dockerfile and entrypoint script into the
 // claudio binary itself (ROD-96). `claudio image build` must work from a
 // binary run anywhere on the host — a Homebrew install, a copied binary,

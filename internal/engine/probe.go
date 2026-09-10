@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package engine detects and talks to the container runtime. See
 // docs/architecture.md §12.1: the engine's identity changes the correct
 // mount strategy, and OrbStack is the target runtime for this project —

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package core's reconciler settles disagreements between SQLite's
 // intent and Docker's observed reality — docs/architecture.md §10.1 and
 // ROD-99. Phase 1 has no daemon watching the Docker event stream, so

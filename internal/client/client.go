@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package client defines the interface every CLI command depends on.
 // Phase 1 wires local.Client (in-process, calls core directly); phase 2
 // wires remote.Client (HTTP+JSON over a Unix socket, once claudiod

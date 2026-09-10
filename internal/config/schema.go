@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package config implements Claudio's own configuration schema — not
 // devcontainer.json's. See docs/architecture.md §12.4 for why: forwardPorts
 // cannot express a service name or expose:false, and hostRequirements

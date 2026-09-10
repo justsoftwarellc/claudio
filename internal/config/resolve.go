@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 package config
 
 // EffectiveResources applies the three-layer resolution from

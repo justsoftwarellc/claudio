@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package repo implements Claudio's repository model: one clone per repo
 // ("root"), one git worktree per session. See docs/architecture.md §5.1
 // and Appendix B.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 package store
 
 // Migrations are applied in order, once each, tracked in schema_version.

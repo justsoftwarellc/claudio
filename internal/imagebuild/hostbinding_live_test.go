@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Verifies the loopback-binding guidance the entrypoint seeds — see
 // image/entrypoint.sh. Built and run against a real daemon for the same
 // reason as the rest of this package's live tests: the point is that the

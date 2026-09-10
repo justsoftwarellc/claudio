@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package coreerr defines the typed error codes core's exported
 // operations return, per docs/architecture.md §12.4's interface
 // discipline: "errors carry a typed code, not just a string." This is

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package portdetect infers which container ports a repo's app listens on
 // from manifest files, per docs/architecture.md §6.1 and ROD-98's phase-1
 // scope: framework defaults only. Richer signals (docker-compose.yml,

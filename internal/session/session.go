@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 // Package session wraps the tmux operations Claudio needs against a
 // running instance's container — docs/architecture.md's own package
 // layout names this "tmux: create, send-keys, capture-pane" (§12.4).
