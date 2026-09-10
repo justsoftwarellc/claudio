@@ -77,7 +77,8 @@ func cmdPorts(ctx context.Context, args []string) int {
 			return 1
 		}
 		fmt.Printf("Reserved container port %d -> host port %d.\n", addPort, hostPort)
-		fmt.Printf("Not yet published on the running container — run `claudio restart %s` to apply it.\n", idOrName)
+		fmt.Printf("Not yet published on the running container — run `claudio restart %s` to apply it,\n", idOrName)
+		fmt.Println("then start the app inside the container again so it listens on the port.")
 	}
 	if doRemove {
 		if err := c.RemovePort(ctx, idOrName, removePort); err != nil {

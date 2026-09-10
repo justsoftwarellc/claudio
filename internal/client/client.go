@@ -77,9 +77,11 @@ type Client interface {
 	// Restart is Stop followed by Start as one operation (ROD-100).
 	Restart(ctx context.Context, idOrName string, fresh bool, env map[string]string, progress core.ProgressFunc) (core.CreateResult, error)
 
-	// AddPort reserves a new host port for an existing instance —
-	// effective on the instance's next Restart, not immediately, since
-	// Docker cannot add a binding to a running container (ROD-98).
+	// AddPort reserves a new host port for an existing instance and
+	// declares it in the worktree's .claudio.yml, which is what a Restart
+	// re-derives its ports from. Effective on that Restart, not
+	// immediately: Docker cannot add a binding to a running container
+	// (ROD-98).
 	AddPort(ctx context.Context, idOrName string, containerPort int) (hostPort int, err error)
 
 	// RemovePort releases a host port reservation — same

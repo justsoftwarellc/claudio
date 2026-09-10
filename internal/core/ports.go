@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/rodrigomorales/claudio/internal/config"
 	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/store"
 )
@@ -40,18 +41,34 @@ type PortsStore interface {
 // Recorded with store.PortManual, matching AdoptContainer's convention
 // for a mapping the user asserted rather than one detection found.
 //
-// The reservation only ever touches the store: Docker cannot add a
-// published port to a running container, so the caller (cmd/claudio)
-// must warn that this takes effect on the instance's next `claudio
-// restart`, not immediately — ROD-98's own doc calls this out as a
-// known phase-1 limitation, not a bug to work around here.
+// The port is also declared in the instance worktree's .claudio.yml,
+// because that file — not the store — is what a restart re-derives its
+// ports from (see allocatePorts). Without the declaration the store
+// reservation would be dropped by the very restart the user is told to
+// run, since stopping releases every reservation.
+//
+// Nothing is published until that restart: Docker cannot add a binding
+// to a running container. The app inside the container has to be started
+// again afterwards to listen on the port.
 func AddPort(ctx context.Context, st PortsStore, idOrName string, containerPort int, rangeLow, rangeHigh int) (hostPort int, err error) {
 	inst, err := st.GetInstance(ctx, idOrName)
 	if err != nil {
 		return 0, wrapGetInstance(fmt.Sprintf("core: ports --add %d", containerPort), idOrName, err)
 	}
 	op := fmt.Sprintf("core: ports %s --add %d", inst.ID, containerPort)
-	hostPort, err = st.AllocatePort(ctx, inst.ID, containerPort, fmt.Sprintf("manual-%d", containerPort), store.PortManual, nil, rangeLow, rangeHigh)
+
+	serviceName := fmt.Sprintf("manual-%d", containerPort)
+
+	// Declare it before reserving: a failure to record the port should be
+	// a plain error, not a reservation that silently vanishes on restart.
+	if err := config.AddPortToRepoConfig(inst.WorktreeDir, serviceName, containerPort); err != nil {
+		if errors.Is(err, config.ErrPortAlreadyDeclared) {
+			return 0, coreerr.Wrap(coreerr.Conflict, op, err)
+		}
+		return 0, coreerr.Wrap(coreerr.Internal, op+": declare in .claudio.yml", err)
+	}
+
+	hostPort, err = st.AllocatePort(ctx, inst.ID, containerPort, serviceName, store.PortManual, nil, rangeLow, rangeHigh)
 	if err != nil {
 		return 0, wrapAllocatePort(op, err, rangeLow, rangeHigh)
 	}
