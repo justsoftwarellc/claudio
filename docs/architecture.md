@@ -830,8 +830,11 @@ services:                     # sidecars; synthesized into the compose project
     resources:                # sidecars get their own, smaller ceilings
       memory: 1g
 
-post_create:                  # run once, inside the container, after mounting
+post_create:                  # run once, at create only, after mounting
   - npm ci
+
+post_start:                   # run on every start, backgrounded; survives restart
+  - npm start
 
 resources:                    # what THIS PROJECT needs; overridable locally
   memory: 10g

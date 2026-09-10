@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rodrigomorales/claudio/internal/config"
@@ -458,6 +459,14 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		}
 	}
 
+	// Unconditional, unlike post_create above: this is the hook whose
+	// whole purpose is to survive a restart (ROD-127). Runs after
+	// post_create so a first create installs dependencies before
+	// anything tries to start against them.
+	if err := runPostStart(ctx, params.DockerHost, containerID, repoRoot, worktreeDir, progress); err != nil {
+		return "", nil, failAndReturn(ctx, st, id, err)
+	}
+
 	// StepHealthy: phase 1 has no health probe yet (that needs the
 	// container to expose something to probe, e.g. an HTTP endpoint or a
 	// tmux-session check) — a started container is treated as healthy
@@ -505,6 +514,96 @@ func runPostCreate(ctx context.Context, dockerHost, containerID, repoRoot, workt
 		}
 	}
 	return nil
+}
+
+// PostStartLogPath is where a post_start command's stdout and stderr
+// land inside the container. Exported because it is user-facing: it is
+// the only diagnostic for a backgrounded command, so `claudio` reports
+// it and the docs name it.
+//
+// Under /tmp rather than the worktree deliberately — the worktree is
+// the user's actual checkout, and a log file appearing as an untracked
+// file in their repo (or worse, in a commit) is a bug, not a feature.
+const PostStartLogPath = "/tmp/claudio-post-start.log"
+
+// runPostStart executes .claudio.yml's post_start commands inside the
+// just-started container — ROD-127's counterpart to runPostCreate, and
+// different from it in the two ways that matter:
+//
+// It runs on every provision, not just create, because a Claudio
+// restart replaces the container outright. Anything that was *running*
+// in the old one — a dev server, a worker — is gone, and post_create
+// (gated to create) cannot bring it back.
+//
+// It launches each command detached instead of awaiting it. This is
+// forced by engine.RunInContainer, which attaches to the exec stream
+// and io.Copy's until it closes: a foreground `npm start` never closes
+// that stream, so provisioning would block forever and `claudio create`
+// would never return. setsid detaches the process from the exec's
+// session so it is not signalled when that exec ends, and redirecting
+// all three fds is what actually lets io.Copy see EOF and return —
+// without the redirect the child inherits the exec's stdout and holds
+// the stream open even after setsid, which reintroduces the hang the
+// detaching was meant to avoid.
+//
+// The cost of detaching is that a post_start command has no meaningful
+// exit status at spawn time: a command that dies a second later still
+// looks like a successful spawn here. Only the failure to *launch* is
+// reported. That is why the log path is surfaced through progress —
+// it is the only place the real outcome shows up. Provisioning is
+// deliberately not failed by a post_start command's own exit: a dead
+// dev server should leave a usable instance the user can attach to and
+// debug, not an instance that refuses to exist.
+//
+// A missing .claudio.yml or an empty post_start list is not an error.
+func runPostStart(ctx context.Context, dockerHost, containerID, repoRoot, worktreeDir string, progress ProgressFunc) error {
+	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
+	if err != nil {
+		return fmt.Errorf("post_start: load repo config: %w", err)
+	}
+	if len(repoCfg.PostStart) == 0 {
+		return nil
+	}
+
+	containerWorkdir, err := engine.ContainerWorkdir(repoRoot, worktreeDir)
+	if err != nil {
+		return fmt.Errorf("post_start: %w", err)
+	}
+
+	// Truncated once per provision, then appended to by each command, so
+	// the log always describes the container currently running rather
+	// than accumulating across every restart the instance has ever had.
+	if _, _, err := engine.RunInContainer(ctx, dockerHost, containerID, containerWorkdir, ": > "+PostStartLogPath); err != nil {
+		return fmt.Errorf("post_start: prepare log: %w", err)
+	}
+
+	for _, cmd := range repoCfg.PostStart {
+		launch := fmt.Sprintf("setsid sh -c %s </dev/null >>%s 2>&1 &",
+			shellQuote(cmd), PostStartLogPath)
+		output, exitCode, err := engine.RunInContainer(ctx, dockerHost, containerID, containerWorkdir, launch)
+		if err != nil {
+			return fmt.Errorf("post_start %q: %w", cmd, err)
+		}
+		// A nonzero status here is the shell failing to *spawn* the
+		// command (the command's own later exit is invisible to us by
+		// design) — worth failing provisioning for, since it means
+		// post_start was malformed rather than merely unsuccessful.
+		if exitCode != 0 {
+			return fmt.Errorf("post_start %q: launch failed with %d: %s", cmd, exitCode, output)
+		}
+		reportProgress(progress, store.StepContainerUp, fmt.Sprintf("post_start: launched %q (log: %s)", cmd, PostStartLogPath))
+	}
+	return nil
+}
+
+// shellQuote wraps s for safe use as a single POSIX shell word. Needed
+// because runPostStart nests the user's command inside `setsid sh -c
+// ...`, so it passes through one more round of shell parsing than
+// runPostCreate's commands do — without quoting, a post_start entry
+// containing a space, quote, or `$` would be re-split or expanded a
+// second time and stop meaning what it says in .claudio.yml.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // resolveImage picks the image provisionContainer actually passes to

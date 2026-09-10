@@ -73,11 +73,27 @@ type Image struct {
 
 // RepoConfig is <repo>/.claudio.yml — what the project needs. Versioned,
 // shared, committed. Every field optional.
+//
+// The two hooks are deliberately split by lifetime, not by ordering
+// (ROD-127). A Claudio restart *replaces* the container rather than
+// restarting a process inside it, so "what has to exist on disk" and
+// "what has to be running" have genuinely different schedules:
+//
+//   - PostCreate runs once, at create only, and its exit status gates
+//     provisioning. For work that persists in the worktree — `npm ci`,
+//     migrations, code generation. Re-running it on every container
+//     recreation would be wasteful, which is why StartInstance skips it.
+//   - PostStart runs on every provision, create and start alike, and is
+//     launched detached. For work that dies with the container — a dev
+//     server, a worker, a queue consumer. Without it there is no way to
+//     bring such a process back after `claudio restart`, which is the
+//     hole this pair closes.
 type RepoConfig struct {
 	Image      Image     `yaml:"image,omitempty"`
 	Ports      []Port    `yaml:"ports,omitempty"`
 	Services   []Service `yaml:"services,omitempty"`
 	PostCreate []string  `yaml:"post_create,omitempty"`
+	PostStart  []string  `yaml:"post_start,omitempty"`
 	Resources  Resources `yaml:"resources,omitempty"`
 }
 

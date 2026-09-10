@@ -294,8 +294,11 @@ services:                   # sidecars synthesized into a compose project — se
     env:
       POSTGRES_PASSWORD: dev
 
-post_create:                 # run once, inside the container, after the workspace is mounted
+post_create:                 # run ONCE, at create only — install dependencies here
   - npm ci
+
+post_start:                  # run on EVERY start, in the background — run servers here
+  - npm start
 
 resources:
   memory: 10g               # this repo needs more than the machine default

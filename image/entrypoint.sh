@@ -67,6 +67,19 @@ Only ports mapped for this instance are reachable. To expose one that is
 not yet mapped, the user runs `claudio ports <id> --add <port>` on the
 host, then `claudio restart <id>` — which replaces the container, so the
 app has to be started again afterwards.
+
+To have an app start automatically instead — including after a restart —
+add it to `post_start:` in the repo's `.claudio.yml`:
+
+    post_create:          # once, at create: dependencies
+      - npm ci
+    post_start:           # every start: the server itself
+      - npm start
+
+`post_start` commands are backgrounded; their output goes to
+/tmp/claudio-post-start.log inside this container. Note that
+`post_create` alone is NOT enough for anything that must be *running* —
+it is skipped on restart.
 MEMO
 fi
 

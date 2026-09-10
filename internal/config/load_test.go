@@ -151,3 +151,41 @@ ports:
 		t.Fatalf("expected bind to keep default when not overridden, got %s", cfg.Ports.Bind)
 	}
 }
+
+// post_start is the hook that survives a restart (ROD-127). Parsed
+// alongside post_create rather than instead of it — a repo that both
+// installs dependencies and runs a server declares both.
+func TestLoadRepoConfigParsesPostStart(t *testing.T) {
+	path := writeTemp(t, `
+post_create:
+  - npm ci
+
+post_start:
+  - npm start
+  - npm run worker
+`)
+	cfg, err := LoadRepoConfig(path)
+	if err != nil {
+		t.Fatalf("LoadRepoConfig: %v", err)
+	}
+	if len(cfg.PostCreate) != 1 || cfg.PostCreate[0] != "npm ci" {
+		t.Fatalf("post_create not parsed: %+v", cfg.PostCreate)
+	}
+	if len(cfg.PostStart) != 2 || cfg.PostStart[0] != "npm start" || cfg.PostStart[1] != "npm run worker" {
+		t.Fatalf("post_start not parsed: %+v", cfg.PostStart)
+	}
+}
+
+// The package's unknown-key strictness has to cover the new key too:
+// `poststart` or `post-start` is a typo that must say so rather than
+// silently never starting the user's server.
+func TestLoadRepoConfigRejectsMisspelledPostStart(t *testing.T) {
+	for _, key := range []string{"poststart", "post-start", "on_start"} {
+		t.Run(key, func(t *testing.T) {
+			path := writeTemp(t, key+":\n  - npm start\n")
+			if _, err := LoadRepoConfig(path); err == nil {
+				t.Fatalf("expected %q to be rejected as an unknown key", key)
+			}
+		})
+	}
+}
