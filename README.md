@@ -268,6 +268,30 @@ These are internal-only (reached by service name, never published to the host) �
 
 **Client tools, not the service itself, go in the agent image** — if your app needs `psql` or `redis-cli` to talk to a sidecar, declare that in `.claudio.yml`'s `image:` section (see below), not as a service.
 
+
+### Reaching something already running on your machine
+
+The sidecar story above is for services the *repo* owns. If the thing you want is already running on your machine — a Postgres you keep up all day, an API server in another container, a `docker compose` stack you started yourself — you don't need a second copy of it. Declare it and the container reaches it by name:
+
+```
+claudio create . --host-service db:5432
+```
+
+Inside the container, `db:5432` is now that service. Repeat the flag for more than one. To make it permanent for everyone working on the repo, put it in `.claudio.yml` under `host_services:` instead.
+
+Two things worth knowing:
+
+- **The port is the same on both sides.** `--host-service db:5432` means "the thing on host port 5432, called `db` inside". There's no remapping — claudio adds a hostname, not a port forward — so `db:5432:6000` is refused rather than quietly not working.
+- **Only what you declare resolves.** An undeclared name doesn't work from inside the container. This is deliberate: pointing an instance at your own database is fine, an agent finding host services by guessing names is not. It's also why this is worth thinking about once before you turn it on — you are opening a door out of the sandbox, one name at a time.
+
+`claudio ports <id>` shows both directions, so you can tell what the container serves from what it merely reaches:
+
+```
+SERVICE  DIRECTION  CONTAINER  ADDRESS                 SOURCE
+web      published  3000       http://127.0.0.1:43001  detected (next.config.js)
+db       host       5432       db:5432                 declared (.claudio.yml)
+```
+
 ## `.claudio.yml` and `config.yml`
 
 Two files, two audiences. `<repo>/.claudio.yml` is **what this project needs** — commit it, share it. `~/.claudio/config.yml` is **what this machine allows** — personal, uncommitted, applies to every instance regardless of repo.
@@ -287,6 +311,10 @@ ports:
   - name: web
     container: 3000
     expose: false           # container-internal only; omit or true to publish to the host
+
+host_services:              # services already running on YOUR machine, reachable by name
+  - name: db                #   inside the container: db:5432
+    host: 5432
 
 services:                   # sidecars synthesized into a compose project — see above
   - name: db

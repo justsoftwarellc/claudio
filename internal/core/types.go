@@ -34,6 +34,20 @@ type InstanceView struct {
 
 	Ports []store.PortMapping `json:"ports"`
 
+	// HostServices are the inbound declarations (ROD-128) — host-side
+	// services this instance can reach by name. Read from the worktree's
+	// .claudio.yml rather than the store, because unlike Ports they are
+	// not allocations: nothing is reserved, so there is no reservation to
+	// record or release, and the file is the single source of truth that
+	// a restart re-derives them from.
+	//
+	// Reported separately from Ports rather than merged into it with a
+	// direction flag: they are reached by *name*, have no allocated host
+	// port, and share none of Ports' lifecycle. Folding both into one
+	// list would give every consumer a struct where half the fields are
+	// meaningless depending on a discriminator.
+	HostServices []HostServiceView `json:"host_services,omitempty"`
+
 	// Sidecars is non-empty only for a compose-project instance
 	// (Instance.IsCompose()) — docs/architecture.md §6.4: "Sidecar
 	// health is surfaced in claudio status ... diagnosable without
@@ -75,4 +89,10 @@ type RuntimeView struct {
 	MemTotalBytes   int64  `json:"mem_total_bytes"`
 	NCPU            int    `json:"ncpu"`
 	DockerHost      string `json:"docker_host,omitempty"`
+}
+
+// HostServiceView is one resolved host service, for InstanceView.
+type HostServiceView struct {
+	Name string `json:"name"`
+	Port int    `json:"port"`
 }

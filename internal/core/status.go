@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/rodrigomorales/claudio/internal/compose"
+	"github.com/rodrigomorales/claudio/internal/config"
 	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
 	"github.com/rodrigomorales/claudio/internal/store"
@@ -40,6 +41,16 @@ func GetInstanceView(ctx context.Context, st StatusStore, dockerHost, idOrName s
 	}
 
 	view := InstanceView{Instance: inst, Ports: ports}
+
+	// Best-effort, like every other live read in this function: a
+	// worktree that has been removed out of band should still produce a
+	// status view for the rest of the instance, not an error.
+	if repoCfg, err := config.LoadRepoConfig(inst.WorktreeDir + "/.claudio.yml"); err == nil {
+		for _, hs := range resolveHostServices(repoCfg.HostServices, nil) {
+			view.HostServices = append(view.HostServices, HostServiceView{Name: hs.Name, Port: hs.HostPort})
+		}
+	}
+
 	foundContainer := false
 
 	if inst.IsCompose() {

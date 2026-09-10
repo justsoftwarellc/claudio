@@ -98,7 +98,7 @@ func allocateComposePorts(ctx context.Context, st CreateStore, composeFilePath, 
 // at all") — in that case every declared service comes from repoCfg.Services
 // and is written directly into the generated file rather than layered as
 // an override, since there is no base file to layer over.
-func provisionCompose(ctx context.Context, st CreateStore, composeFilePath string, id, repoURL, repoRoot, worktreeDir string, createdAt int64, params CreateParams, image string, cmd []string, resources engine.ResourceLimits, repoCfg config.RepoConfig, homeDir string, ports []resolvedPort) (containerID string, project string, err error) {
+func provisionCompose(ctx context.Context, st CreateStore, composeFilePath string, id, repoURL, repoRoot, worktreeDir string, createdAt int64, params CreateParams, image string, cmd []string, resources engine.ResourceLimits, repoCfg config.RepoConfig, homeDir string, ports []resolvedPort, hostServices []engine.HostService) (containerID string, project string, err error) {
 	project = compose.ProjectName(id)
 	network := project + "_net"
 
@@ -121,16 +121,17 @@ func provisionCompose(ctx context.Context, st CreateStore, composeFilePath strin
 	}
 
 	override, err := compose.GenerateOverride(network, sidecarNames, rewrites, compose.AgentSpec{
-		InstanceID:  id,
-		RepoURL:     repoURL,
-		CreatedAt:   createdAt,
-		Image:       image,
-		Cmd:         cmd,
-		RepoRoot:    repoRoot,
-		WorktreeDir: worktreeDir,
-		HomeDir:     homeDir,
-		Resources:   resources,
-		Env:         params.Env,
+		HostServices: hostServices,
+		InstanceID:   id,
+		RepoURL:      repoURL,
+		CreatedAt:    createdAt,
+		Image:        image,
+		Cmd:          cmd,
+		RepoRoot:     repoRoot,
+		WorktreeDir:  worktreeDir,
+		HomeDir:      homeDir,
+		Resources:    resources,
+		Env:          params.Env,
 	})
 	if err != nil {
 		return "", "", coreerr.Wrap(coreerr.Internal, "compose: generate override", err)

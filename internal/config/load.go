@@ -34,6 +34,32 @@ func LoadRepoConfig(path string) (RepoConfig, error) {
 			return cfg, fmt.Errorf("config: %s: ports[%d] (%s) missing required field 'container'", path, i, p.Name)
 		}
 	}
+	seenHostService := make(map[string]bool, len(cfg.HostServices))
+	for i, hs := range cfg.HostServices {
+		if hs.Name == "" {
+			return cfg, fmt.Errorf("config: %s: host_services[%d] missing required field 'name'", path, i)
+		}
+		if hs.Host == 0 {
+			return cfg, fmt.Errorf("config: %s: host_services[%d] (%s) missing required field 'host'", path, i, hs.Name)
+		}
+		// The name becomes a hostname inside the container, so a duplicate
+		// is not a harmless repeat: two /etc/hosts entries for one name
+		// resolve to whichever Docker wrote first, silently ignoring the
+		// second declaration. Rejecting it here is the only place the user
+		// can still be told which name collided.
+		if seenHostService[hs.Name] {
+			return cfg, fmt.Errorf("config: %s: host_services[%d]: duplicate name %q — each name becomes one hostname inside the container", path, i, hs.Name)
+		}
+		seenHostService[hs.Name] = true
+		if err := validatePort(hs.Host); err != nil {
+			return cfg, fmt.Errorf("config: %s: host_services[%d] (%s): host: %w", path, i, hs.Name, err)
+		}
+		if hs.Container != nil {
+			if err := validatePort(*hs.Container); err != nil {
+				return cfg, fmt.Errorf("config: %s: host_services[%d] (%s): container: %w", path, i, hs.Name, err)
+			}
+		}
+	}
 	for i, svc := range cfg.Services {
 		if svc.Image == "" {
 			return cfg, fmt.Errorf("config: %s: services[%d] missing required field 'image'", path, i)
@@ -80,4 +106,15 @@ func decodeStrict(data []byte, out interface{}) error {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	return dec.Decode(out)
+}
+
+// validatePort rejects a port number outside TCP's actual range. Checked
+// at load rather than at container-create time so a typo in .claudio.yml
+// names the file and the entry, instead of surfacing later as a Docker
+// error about an address it was handed.
+func validatePort(p int) error {
+	if p < 1 || p > 65535 {
+		return fmt.Errorf("%d is not a valid TCP port (1-65535)", p)
+	}
+	return nil
 }

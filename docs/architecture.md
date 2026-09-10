@@ -383,6 +383,30 @@ Rationale: the container's IP is reachable from the daemon directly on Linux, an
 
 To keep the common case fast, the *pre-detected* ports from §6.1 are bound natively by Docker at container creation; only *runtime-discovered* ports use the proxy.
 
+### 6.3.1 Reaching services already on the host
+
+Everything above runs *outbound* — the container serves, the host dials in. The opposite direction is a separate mechanism, because the two have nothing in common but the word "port".
+
+A repo declares the host-side services an instance may reach:
+
+```yaml
+host_services:
+  - name: db          # reachable inside the container as db:5432
+    host: 5432
+```
+
+and `claudio create --host-service db:5432` does the same per instance, winning over the repo's declaration by name.
+
+Each entry becomes a hostname in the container's `/etc/hosts`, pointing at the host gateway. Three consequences follow, and each is deliberate:
+
+- **Nothing is allocated.** The service is already listening; Claudio adds a name, not a reservation. So unlike §6.2's host ports, the host side here *is* the user's to choose — there is nothing to collide over, and nothing to record in the store or release on stop.
+- **The container port cannot differ from the host port.** A hosts entry maps a name to an *address*; there is no port component. `--host-service db:5432:6000` is refused with that reason rather than accepted and silently resolving `db` to a host serving nothing on 6000.
+- **`host.docker.internal` is always mapped**, declared services or not. OrbStack and Docker Desktop already resolve it through their embedded DNS — verified on the development machine, where it is *absent* from the container's `/etc/hosts` — while plain Linux Docker does not resolve it at all without `--add-host`. Mapping it unconditionally is what makes the name mean the same thing on every runtime instead of working by accident on two of them.
+
+`claudio ports` shows both directions in one table, distinguished by a `DIRECTION` column — `published` for §6.2's outbound mappings, `host` for these. Without it an inbound entry reads as something Claudio published, which is the opposite of what it is.
+
+The sandbox tradeoff is real and is covered in §7.4.
+
 ### 6.4 Compose-based repositories
 
 If the repo has a `docker-compose.yml`, the instance is not a single container but a **compose project**:
@@ -492,6 +516,7 @@ The container is a **security boundary against accident, and a partial boundary 
 - Memory and CPU limits per instance — **6 GB / 4 CPUs** on this machine, set globally and overridable per repo, and overridable again locally with `claudio create --memory M --cpus N --pids N` (§12.3's three-layer resolution: global < repo < local). `create` reports when a local override changes what the repo's own `.claudio.yml` requested, rather than substituting a different number silently. Sized against the **OrbStack VM's 15.7 GB**, not the host's 36 GB: the VM cap is what containers actually share, and sizing against host RAM overcommits by more than 2×.
 - PID limit (512) to contain fork bombs.
 - **An exceeded limit must be legible.** Docker exposes `OOMKilled` in container state; `claudio status` reports "killed: out of memory (limit 6g)" with the command to raise it, rather than a bare `STOPPED`. A limit that produces a baffling failure is worse than no limit — the reconciler would otherwise show a stopped container with no cause. `create` also warns when configured limits across running instances would exceed the VM's memory.
+- **Host services are opt-in, one name at a time.** §6.3.1 lets an instance reach a service already running on the host. This genuinely widens the boundary — a route from the sandbox to something outside it — so it is never blanket access: only the names a repo or the user explicitly declares resolve, and an undeclared name does not (verified: `getent hosts` for an undeclared name fails inside the container while a declared one resolves). The mapped `host.docker.internal` is a *name for an address the container's network could already route to*, not a new grant; what is gated is the per-service alias. The judgment being made is that a developer pointing an instance at their own already-running database is not the threat model — an agent discovering arbitrary host services by guessing names is, and that is what declaration-only resolution prevents.
 - **No Docker socket mount by default.** Mounting `/var/run/docker.sock` into an agent container is a host-root escalation path. Repos that genuinely need Docker-in-Docker get a rootless DinD sidecar, opt-in per instance.
 - **Network egress policy.** Default: unrestricted (agents need npm, PyPI, GitHub, the Anthropic API). Optional `--network-policy=restricted` attaches the container to a network whose egress passes through a filtering proxy with an allowlist.
 - **Credential scoping** — §8.
@@ -821,6 +846,13 @@ ports:
   - name: db
     container: 5432
     expose: false             # reachable from the agent, not published to the host
+
+host_services:                # §6.3.1: services already on the host, reached by name
+  - name: db                  # required; becomes a hostname in the container
+    host: 5432                # required; the port it already listens on
+  - name: api
+    host: 8080
+    container: 8080           # optional, and must equal host — see §6.3.1
 
 services:                     # sidecars; synthesized into the compose project
   - name: db

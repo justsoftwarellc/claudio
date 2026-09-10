@@ -96,19 +96,30 @@ func cmdPorts(ctx context.Context, args []string) int {
 		fmt.Fprintln(os.Stderr, "claudio ports:", describeErr(err))
 		return 1
 	}
-	if len(inst.Ports) == 0 {
+	if len(inst.Ports) == 0 && len(inst.HostServices) == 0 {
 		fmt.Println("No ports mapped.")
 		return 0
 	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "SERVICE\tCONTAINER\tHOST\tSOURCE")
+	// DIRECTION is not decoration: without it an inbound host service
+	// reads as something Claudio published, which is the opposite of
+	// what it is. "published" means the container serves it and the host
+	// dials in; "host" means the host already serves it and the
+	// container dials out (ROD-128).
+	fmt.Fprintln(tw, "SERVICE\tDIRECTION\tCONTAINER\tADDRESS\tSOURCE")
 	for _, p := range inst.Ports {
 		source := string(p.Source)
 		if p.DetectedFrom != nil {
 			source = fmt.Sprintf("%s (%s)", source, *p.DetectedFrom)
 		}
-		fmt.Fprintf(tw, "%s\t%d\thttp://127.0.0.1:%d\t%s\n", p.ServiceName, p.ContainerPort, p.HostPort, source)
+		fmt.Fprintf(tw, "%s\tpublished\t%d\thttp://127.0.0.1:%d\t%s\n", p.ServiceName, p.ContainerPort, p.HostPort, source)
+	}
+	for _, hs := range inst.HostServices {
+		// Addressed by name from inside the container, so the address
+		// column shows what the app would actually dial — not a
+		// host-side URL, which is the one thing this row is not.
+		fmt.Fprintf(tw, "%s\thost\t%d\t%s:%d\tdeclared (.claudio.yml)\n", hs.Name, hs.Port, hs.Name, hs.Port)
 	}
 	tw.Flush()
 	return 0

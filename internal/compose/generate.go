@@ -60,6 +60,11 @@ type AgentSpec struct {
 
 	Resources engine.ResourceLimits
 	Env       map[string]string
+
+	// HostServices are host-side services the agent may reach by name
+	// (ROD-128) — rendered into extra_hosts via engine.ExtraHosts, so
+	// this path and engine.CreateAndStart's produce identical entries.
+	HostServices []engine.HostService
 }
 
 // composeFile is the override document this package writes — the
@@ -91,6 +96,7 @@ type composeService struct {
 	// `!override` YAML tag on a sequence node replaces the base's list
 	// outright instead of appending to it — this is that tag.
 	Ports       overrideStringList `yaml:"ports,omitempty"`
+	ExtraHosts  []string           `yaml:"extra_hosts,omitempty"`
 	Environment map[string]string  `yaml:"environment,omitempty"`
 	Volumes     []string           `yaml:"volumes,omitempty"`
 	WorkingDir  string             `yaml:"working_dir,omitempty"`
@@ -154,6 +160,10 @@ func GenerateOverride(networkName string, sidecarServiceNames []string, rewrites
 		}
 	}
 
+	if err := engine.ValidateHostServices(agent.HostServices); err != nil {
+		return nil, err
+	}
+
 	containerWorkdir, err := engine.ContainerWorkdir(agent.RepoRoot, agent.WorktreeDir)
 	if err != nil {
 		return nil, err
@@ -162,6 +172,7 @@ func GenerateOverride(networkName string, sidecarServiceNames []string, rewrites
 		Image:         agent.Image,
 		ContainerName: "claudio-" + agent.InstanceID,
 		Networks:      []string{networkName},
+		ExtraHosts:    engine.ExtraHosts(agent.HostServices),
 		Environment:   agent.Env,
 		Command:       agent.Cmd,
 		WorkingDir:    containerWorkdir,

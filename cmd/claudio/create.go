@@ -24,7 +24,8 @@ import (
 )
 
 // cmdCreate implements `claudio create <repo|path> [--branch B | --new-branch
-// B] [--name N] [--ports c,...] [--publish-all-interfaces] [--memory M]
+// B] [--name N] [--ports c,...] [--host-service name:port]
+// [--publish-all-interfaces] [--memory M]
 // [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes]
 // [--base-branch B] [--no-refresh]`, plus
 // the greenfield `claudio create --new <name>` path (no upstream repo —
@@ -32,12 +33,13 @@ import (
 // comes from credentialEnv (see env.go).
 func cmdCreate(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo|path> [--branch B | --new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes] [--base-branch B] [--no-refresh]")
-		fmt.Fprintln(os.Stderr, "   or: claudio create --new <name> [--new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail]")
+		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo|path> [--branch B | --new-branch B] [--name N] [--ports container,...] [--host-service name:port] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes] [--base-branch B] [--no-refresh]")
+		fmt.Fprintln(os.Stderr, "   or: claudio create --new <name> [--new-branch B] [--name N] [--ports container,...] [--host-service name:port] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail]")
 		return 1
 	}
 
 	var repoURL, greenfieldName, branch, newBranch, name, portsFlag, envFile, memory string
+	var hostServiceFlags []string
 	var cleanOnFail, assumeYes, publishAllInterfaces, noRefresh bool
 	var baseBranch string
 	var cpus, pids int
@@ -86,6 +88,18 @@ func cmdCreate(ctx context.Context, args []string) int {
 				return 1
 			}
 			portsFlag = args[i]
+		case "--host-service":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "claudio create: --host-service requires a value (e.g. db:5432)")
+				return 1
+			}
+			// Repeatable rather than comma-separated, unlike --ports: each
+			// entry already contains a colon, and stacking two delimiters
+			// makes "db:5432,cache:6379" read as one malformed value on a
+			// typo. Repeating the flag is also what makes each opened hole
+			// in the sandbox individually visible in shell history.
+			hostServiceFlags = append(hostServiceFlags, args[i])
 		case "--env-file":
 			i++
 			if i >= len(args) {
@@ -158,6 +172,16 @@ func cmdCreate(ctx context.Context, args []string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio create:", describeErr(err))
 		return 1
+	}
+
+	var hostServices []config.HostService
+	for _, entry := range hostServiceFlags {
+		hs, err := core.ParseHostServiceFlag(entry)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "claudio create:", describeErr(err))
+			return 1
+		}
+		hostServices = append(hostServices, hs)
 	}
 
 	var resourceOverride *config.Resources
@@ -236,6 +260,7 @@ func cmdCreate(ctx context.Context, args []string) int {
 		NewBranch:        newBranch,
 		Name:             namePtr,
 		ManualPorts:      manualPorts,
+		HostServices:     hostServices,
 		Env:              env,
 		EnvFile:          envFile,
 		CleanOnFail:      cleanOnFail,

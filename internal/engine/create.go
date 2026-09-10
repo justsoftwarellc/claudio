@@ -24,6 +24,90 @@ type PortBinding struct {
 	HostPort      int
 }
 
+// HostGatewayAlias is the hostname Docker's own `host-gateway` magic
+// value resolves to — the address of the host from inside the container.
+//
+// It is added unconditionally rather than only when a host service is
+// declared, and that is deliberate: OrbStack and Docker Desktop already
+// resolve this name via their embedded DNS (verified on the development
+// machine — it is *not* in the container's /etc/hosts there), while plain
+// Linux Docker does not resolve it at all without this mapping. Adding it
+// everywhere is what makes the name mean the same thing on every runtime
+// instead of working by accident on two of them.
+//
+// Note this alone grants no *access*: it is a name for an address the
+// container's network could already route to. What is opt-in is the
+// per-service alias below, which is the part a repo actually declares.
+const HostGatewayAlias = "host.docker.internal"
+
+// dockerHostGateway is Docker's reserved value for "resolve this to the
+// host's gateway address", substituted by the daemon at container create.
+const dockerHostGateway = "host-gateway"
+
+// HostService is one host-side service the container should be able to
+// reach by name (ROD-128) — the inbound counterpart to PortBinding.
+//
+// Unlike PortBinding nothing is allocated or published here: the service
+// is already listening on the host, and this only teaches the container's
+// resolver a name for it. HostPort is therefore the user's to choose,
+// which is exactly the opposite of PortBinding.HostPort.
+type HostService struct {
+	Name     string
+	HostPort int
+	// ContainerPort is the port the name is expected to be reached on
+	// from inside. Docker's ExtraHosts maps names to *addresses*, not to
+	// ports, so a ContainerPort differing from HostPort cannot be honored
+	// by a hosts entry alone — CreateAndStart surfaces that rather than
+	// silently resolving the name to a port nothing listens on.
+	ContainerPort int
+}
+
+// ExtraHosts renders the /etc/hosts entries for a set of host services,
+// always including HostGatewayAlias itself. Exported so the compose path
+// (internal/compose) produces byte-identical entries to the
+// single-container path rather than reimplementing the convention.
+func ExtraHosts(services []HostService) []string {
+	out := make([]string, 0, len(services)+1)
+	out = append(out, HostGatewayAlias+":"+dockerHostGateway)
+	for _, s := range services {
+		// Every alias points at the same address — the host — because that
+		// is what a hosts entry can express. The port is the caller's to
+		// use when dialing; see HostService.ContainerPort.
+		out = append(out, s.Name+":"+dockerHostGateway)
+	}
+	return out
+}
+
+// ValidateHostServices rejects the declarations Docker's ExtraHosts
+// cannot actually honor, so the failure names the declaration instead of
+// appearing later as a connection refused inside the container.
+//
+// The remappable case (container port != host port) is the one worth
+// spelling out: a hosts entry maps a *name* to an *address*, with no
+// port component anywhere, so "reach host 5432 as db:6000" is not
+// something this mechanism can express. Saying so is better than
+// accepting it and resolving db to a host where nothing serves 6000.
+func ValidateHostServices(services []HostService) error {
+	seen := make(map[string]bool, len(services))
+	for _, s := range services {
+		if s.Name == "" {
+			return fmt.Errorf("engine: host service with no name")
+		}
+		if s.Name == HostGatewayAlias {
+			return fmt.Errorf("engine: host service %q shadows the built-in host alias — pick another name", s.Name)
+		}
+		if seen[s.Name] {
+			return fmt.Errorf("engine: duplicate host service name %q", s.Name)
+		}
+		seen[s.Name] = true
+		if s.ContainerPort != 0 && s.ContainerPort != s.HostPort {
+			return fmt.Errorf("engine: host service %q: container port %d differs from host port %d — a hosts entry maps a name to an address, not to a port, so the container reaches this service on %d or not at all",
+				s.Name, s.ContainerPort, s.HostPort, s.HostPort)
+		}
+	}
+	return nil
+}
+
 // ResourceLimits mirrors config.Resources, translated to the units Docker
 // wants, so this package does not need to import internal/config (engine
 // stays a pure Docker-facing layer — docs/architecture.md §12.4). A nil
@@ -73,6 +157,13 @@ type CreateSpec struct {
 	Ports     []PortBinding
 	Resources ResourceLimits
 
+	// HostServices are host-side services this container may reach by
+	// name (ROD-128). Opt-in per service: an undeclared name does not
+	// resolve, which is what keeps §7.4's sandbox posture honest — the
+	// route to the host exists, but nothing tells the agent where to
+	// find a service it was not given.
+	HostServices []HostService
+
 	// PublishAllInterfaces binds published ports to 0.0.0.0 instead of
 	// the default 127.0.0.1 — `claudio create --publish-all-interfaces`
 	// (docs/architecture.md §6.2). Off by default and deliberately opt-in
@@ -121,6 +212,10 @@ func CreateAndStart(ctx context.Context, host string, spec CreateSpec) (containe
 		return "", err
 	}
 
+	if err := ValidateHostServices(spec.HostServices); err != nil {
+		return "", err
+	}
+
 	env := make([]string, 0, len(spec.Env))
 	for k, v := range spec.Env {
 		env = append(env, k+"="+v)
@@ -145,6 +240,7 @@ func CreateAndStart(ctx context.Context, host string, spec CreateSpec) (containe
 			{Type: mount.TypeBind, Source: spec.HomeDir, Target: "/home/agent"},
 		},
 		PortBindings: portBindings,
+		ExtraHosts:   ExtraHosts(spec.HostServices),
 		Resources: container.Resources{
 			Memory:   spec.Resources.MemoryBytes,
 			NanoCPUs: spec.Resources.NanoCPUs,

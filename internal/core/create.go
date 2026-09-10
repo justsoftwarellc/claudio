@@ -63,10 +63,15 @@ type CreateParams struct {
 	NewBranch      string              `json:"new_branch,omitempty"` // explicit --new-branch: create from the default branch
 	Name           *string             `json:"name,omitempty"`
 	ManualPorts    []portdetect.Manual `json:"manual_ports,omitempty"`
-	Env            map[string]string   `json:"env,omitempty"`      // credential + any extra vars, e.g. CLAUDE_CODE_OAUTH_TOKEN
-	EnvFile        string              `json:"env_file,omitempty"` // --env-file: host path to copy into the worktree at .claudio/env (docs/architecture.md §5.1)
-	WorkspaceRoot  string              `json:"workspace_root,omitempty"`
-	Image          string              `json:"image,omitempty"`
+	// HostServices are `claudio create --host-service` entries: services
+	// already running on the host this instance may reach by name
+	// (ROD-128). Layered over the repo's own host_services: by
+	// resolveHostServices, local winning by name.
+	HostServices  []config.HostService `json:"host_services,omitempty"`
+	Env           map[string]string    `json:"env,omitempty"`      // credential + any extra vars, e.g. CLAUDE_CODE_OAUTH_TOKEN
+	EnvFile       string               `json:"env_file,omitempty"` // --env-file: host path to copy into the worktree at .claudio/env (docs/architecture.md §5.1)
+	WorkspaceRoot string               `json:"workspace_root,omitempty"`
+	Image         string               `json:"image,omitempty"`
 	// Resources is the global-config baseline, resolved by
 	// client.Local.resolveCreateParams before CreateInstance ever runs —
 	// same "resolved ahead of time" contract as WorkspaceRoot/DockerHost
@@ -235,6 +240,16 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		}
 	}
 
+	// Written into the worktree before provisioning, so a restart —
+	// which re-derives everything from this file and never sees the
+	// original flags — keeps resolving these names (ROD-128; the same
+	// disappearing-declaration bug ROD-123 fixed for `ports --add`).
+	for _, hs := range params.HostServices {
+		if err := config.AddHostServiceToRepoConfig(worktreeDir, hs); err != nil {
+			return CreateResult{}, coreerr.Wrap(coreerr.Internal, op+": declare host service in .claudio.yml", err)
+		}
+	}
+
 	createdAt := time.Now().Unix()
 	if err := st.CreateInstance(ctx, store.NewInstanceParams{
 		ID:          id,
@@ -344,6 +359,11 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
 
+	hostServices := resolveHostServices(repoCfg.HostServices, params.HostServices)
+	if err := engine.ValidateHostServices(hostServices); err != nil {
+		return "", nil, failAndReturn(ctx, st, id, coreerr.Wrap(coreerr.InvalidInput, "host services", err))
+	}
+
 	if useCompose {
 		ports, err = allocateComposePorts(ctx, st, composeFilePath, id, params)
 		if err != nil {
@@ -375,7 +395,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		}
 
 		var project string
-		containerID, project, err = provisionCompose(ctx, st, composeFilePath, id, repoURL, repoRoot, worktreeDir, createdAt, params, image, cmd, resources, repoCfg, homeDir, ports)
+		containerID, project, err = provisionCompose(ctx, st, composeFilePath, id, repoURL, repoRoot, worktreeDir, createdAt, params, image, cmd, resources, repoCfg, homeDir, ports, hostServices)
 		if err != nil {
 			return "", nil, failAndReturn(ctx, st, id, err)
 		}
@@ -425,16 +445,17 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		}
 
 		containerID, err = engine.CreateAndStart(ctx, params.DockerHost, engine.CreateSpec{
-			InstanceID:  id,
-			RepoURL:     repoURL,
-			CreatedAt:   createdAt,
-			Image:       image,
-			Cmd:         cmd,
-			RepoRoot:    repoRoot,
-			WorktreeDir: worktreeDir,
-			HomeDir:     homeDir,
-			Ports:       toBindings(ports),
-			Resources:   resources,
+			InstanceID:   id,
+			RepoURL:      repoURL,
+			CreatedAt:    createdAt,
+			Image:        image,
+			Cmd:          cmd,
+			RepoRoot:     repoRoot,
+			WorktreeDir:  worktreeDir,
+			HomeDir:      homeDir,
+			Ports:        toBindings(ports),
+			Resources:    resources,
+			HostServices: hostServices,
 
 			PublishAllInterfaces: params.PublishAllInterfaces,
 

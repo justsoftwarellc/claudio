@@ -51,6 +51,41 @@ func (p Port) Exposed() bool {
 	return p.Expose == nil || *p.Expose
 }
 
+// HostService is one entry in the repo config's `host_services:` list —
+// a service *already running on the host* that this instance should be
+// able to reach (ROD-128). It is the inbound counterpart to Port, and
+// deliberately a separate key rather than a variant of `ports:`:
+//
+//   - `ports:` publishes container -> host, and its host side is never
+//     the user's to choose (§6.2's first-free-in-range allocation is what
+//     lets two instances of one repo coexist).
+//   - `host_services:` is the opposite direction, and its host side is
+//     the *only* thing the user can meaningfully name — the port some
+//     other container or process is already listening on. Nothing is
+//     allocated, so nothing can collide.
+//
+// Folding this into `ports:` would have meant a `host:container` form on
+// a key whose own CLI flag deliberately rejects exactly that syntax.
+//
+// Name becomes a hostname inside the container, so the app reaches
+// `db:5432` the same way §6.4 already promises for compose sidecars.
+type HostService struct {
+	Name      string `yaml:"name"`
+	Host      int    `yaml:"host"`
+	Container *int   `yaml:"container,omitempty"` // nil means "same as Host"
+}
+
+// ContainerPort is the port Name resolves to inside the container.
+// Defaulting to Host keeps the common case ("it's on 5432, let me reach
+// it on 5432") free of ceremony, while still allowing a repo whose code
+// hardcodes a different port to remap without editing the code.
+func (h HostService) ContainerPort() int {
+	if h.Container == nil {
+		return h.Host
+	}
+	return *h.Container
+}
+
 // Service is a sidecar declared without a docker-compose.yml — see
 // docs/architecture.md §6.4 and ROD-106. Synthesized into the per-instance
 // compose project alongside anything the repo's own compose file declares.
@@ -89,12 +124,17 @@ type Image struct {
 //     bring such a process back after `claudio restart`, which is the
 //     hole this pair closes.
 type RepoConfig struct {
-	Image      Image     `yaml:"image,omitempty"`
-	Ports      []Port    `yaml:"ports,omitempty"`
-	Services   []Service `yaml:"services,omitempty"`
-	PostCreate []string  `yaml:"post_create,omitempty"`
-	PostStart  []string  `yaml:"post_start,omitempty"`
-	Resources  Resources `yaml:"resources,omitempty"`
+	Image Image  `yaml:"image,omitempty"`
+	Ports []Port `yaml:"ports,omitempty"`
+	// HostServices are services already running on the host that this
+	// instance may reach (ROD-128). Opt-in per service, never a blanket
+	// route to the host — see §7.4 on why the sandbox boundary is not
+	// widened by default.
+	HostServices []HostService `yaml:"host_services,omitempty"`
+	Services     []Service     `yaml:"services,omitempty"`
+	PostCreate   []string      `yaml:"post_create,omitempty"`
+	PostStart    []string      `yaml:"post_start,omitempty"`
+	Resources    Resources     `yaml:"resources,omitempty"`
 }
 
 // PortsConfig is the global port-allocation policy (ROD-98).
