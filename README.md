@@ -358,6 +358,10 @@ If claudio's state database is lost, rebuilt from a backup, or a container is cr
 
 **A change to the image isn't showing up in a running instance** — rebuilding the `claudio` binary doesn't help: the container's entrypoint ships in the *image*, not the CLI. `claudio restart` doesn't either — it recreates the container from whatever image is tagged now, but never rebuilds it. Use `claudio rebuild <id>`, which does both and reports the image it moved between (`Image 4e1269969011 -> 98e847299a9f`), or tells you the image was already current so you can go looking elsewhere.
 
+**"Claude configuration file at /home/agent/.claude.json is corrupted"** — Claude Code found invalid JSON in its own config and won't start, so `claudio attach` drops you into a session that immediately errors out. Repair it with `claudio config restore <id>`, then `claudio restart <id>` to apply it (the config is only read at startup, so a session that's already up keeps running against the old one).
+
+The restore rebuilds the file host-side, through the bind-mounted `home/` — it never needs the broken session to come up, and works on a stopped instance. It prefers Claude Code's own timestamped backups under `~/.claude/backups/`, so what comes back is the real config from minutes earlier rather than a bare template; failing that it falls back to the same defaults the image pre-seeds. The broken file is renamed aside to `.claude.json.broken-<timestamp>`, never deleted.
+
 **"no such instance"** — the ID or name doesn't match anything claudio knows about. `claudio ls --all` to see everything, including stopped instances (a destroyed instance is gone for good, not just hidden).
 
 ## License

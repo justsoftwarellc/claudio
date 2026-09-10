@@ -101,6 +101,14 @@ type Client interface {
 	// own.
 	BuildImage(ctx context.Context, params core.BuildImageParams, progress func(string)) (core.BuildImageResult, error)
 
+	// RestoreConfig rewrites an instance's ~/.claude.json so Claude Code
+	// can start against it again, after the file was left with invalid
+	// JSON — the repair path for an `attach` that fails inside Claude
+	// Code rather than inside Claudio. Host-side and container-free by
+	// design, so it works on a stopped instance and on one whose session
+	// will not come up at all.
+	RestoreConfig(ctx context.Context, idOrName string) (core.RestoreConfigResult, error)
+
 	// DockerHost is the resolved runtime.docker_host used for this
 	// client's Docker calls — attach needs it directly since it execs
 	// into `docker`/the SDK itself rather than going through Client

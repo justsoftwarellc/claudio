@@ -135,6 +135,10 @@ func (l *Local) BuildImage(ctx context.Context, params core.BuildImageParams, pr
 	return core.BuildImage(ctx, params, progress)
 }
 
+func (l *Local) RestoreConfig(ctx context.Context, idOrName string) (core.RestoreConfigResult, error) {
+	return core.RestoreConfig(ctx, l.store, idOrName)
+}
+
 func (l *Local) DockerHost() string {
 	return l.global.Runtime.DockerHost
 }

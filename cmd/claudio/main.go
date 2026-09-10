@@ -61,6 +61,8 @@ func run(args []string) int {
 		return cmdDaemon(ctx, args[1:])
 	case "image":
 		return cmdImage(ctx, args[1:])
+	case "config":
+		return cmdConfig(ctx, args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return 0
@@ -100,6 +102,9 @@ Usage:
   claudio unlink [<id>]           untie one (the instance itself is untouched)
   claudio adopt <container>       reconcile an untracked container into the store
   claudio forget <container>      remove an untracked container permanently
+  claudio config restore [<id>] [--json]
+                                   rewrite an instance's ~/.claude.json when Claude
+                                   Code refuses to start against it (invalid JSON)
   claudio image build [--repo <path>]
                                    build claudio/base:latest (and a repo-specific
                                    layer, if --repo's .claudio.yml asks for one)
