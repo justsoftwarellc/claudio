@@ -2,3 +2,7 @@
 *.db
 *.db-shm
 *.db-wal
+
+# Docs site: dependencies and build output
+docs/site/node_modules/
+docs/site/doc_build/

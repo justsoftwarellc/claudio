@@ -17,7 +17,7 @@ One thing it can't do for you: SSH access to the repos you want to work in
 ## Install
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/justsoftwarellc/claudio.git
 cd claudio
 ./install.sh
 ```

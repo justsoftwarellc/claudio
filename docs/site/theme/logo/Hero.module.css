@@ -1,0 +1,126 @@
+/*
+ * The hero paints its own dark ground (#07100a — the model's own
+ * backdrop) in both themes, so every colour here is stated against that
+ * rather than inherited from the Rspress theme tokens. A light-theme
+ * reader still gets light text here, because the surface under it is
+ * dark either way.
+ */
+
+.hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* Fill the viewport below the fixed nav bar rather than 100vh, which
+     would push the CTA under the fold by exactly the nav's height. */
+  min-height: calc(100vh - var(--rp-nav-height, 60px));
+  overflow: hidden;
+  text-align: center;
+}
+
+.stage {
+  position: absolute;
+  inset: 0;
+  /* The turntable reads as an invitation to drag, so the stage takes
+     pointer events — but only over itself. The CTA sits above it in the
+     stacking order and stays clickable. */
+  z-index: 0;
+  opacity: 0;
+  transition: opacity 600ms ease;
+}
+
+/* Fade the canvas in once there is something in it — a hard cut from
+   empty ground to a lit model is jarring on a slow connection. */
+.stage[data-status='ready'] {
+  opacity: 1;
+}
+
+.content {
+  position: relative;
+  z-index: 1;
+  /* The model occupies the centre of the stage, so the copy sits low and
+     lets it breathe. */
+  margin-top: auto;
+  padding: 0 24px 12vh;
+  /* Everything here is a target or text to read; the drag surface is the
+     canvas behind it. */
+  pointer-events: none;
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(2.5rem, 7vw, 4.5rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: #eafff0;
+  text-shadow: 0 2px 24px rgba(7, 16, 10, 0.9);
+}
+
+.tagline {
+  margin: 16px auto 0;
+  max-width: 34rem;
+  font-size: clamp(1rem, 2vw, 1.15rem);
+  line-height: 1.6;
+  color: #a9c9b4;
+  text-shadow: 0 1px 16px rgba(7, 16, 10, 0.9);
+}
+
+.cta {
+  display: inline-block;
+  margin-top: 32px;
+  padding: 13px 34px;
+  border: 1px solid #3fd968;
+  border-radius: 999px;
+  background: rgba(31, 122, 52, 0.18);
+  color: #c9ffd8;
+  font-size: 1.02rem;
+  font-weight: 600;
+  text-decoration: none;
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease;
+}
+
+.cta:hover {
+  background: rgba(63, 217, 104, 0.3);
+  border-color: #8dffb0;
+  color: #eafff0;
+  transform: translateY(-1px);
+}
+
+.cta:focus-visible {
+  outline: 2px solid #8dffb0;
+  outline-offset: 3px;
+}
+
+/* Shown only when WebGL never came up, so the hero is never an anonymous
+   dark rectangle. */
+.fallbackMark {
+  position: absolute;
+  z-index: 0;
+  margin: 0;
+  font-family: ui-monospace, "Courier New", monospace;
+  font-size: clamp(3rem, 12vw, 8rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: rgba(63, 217, 104, 0.16);
+  user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The model still renders and can still be dragged; it just stops
+     moving on its own. The turntable and the matrix cascade are the
+     motion, and both are decorative. */
+  .stage {
+    transition: none;
+  }
+
+  .cta {
+    transition: none;
+  }
+}

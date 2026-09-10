@@ -6,17 +6,25 @@
   "scripts": {
     "build": "rspress build",
     "dev": "rspress dev",
-    "preview": "rspress preview"
+    "preview": "rspress preview",
+    "test": "vitest run",
+    "start": "rspress preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@rspress/core": "^2.0.19"
+    "@rspress/core": "^2.0.19",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@types/node": "^22.8.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "@types/three": "^0.184.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
