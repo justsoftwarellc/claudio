@@ -1,12 +1,21 @@
-# Claudio — Architecture
+# RFC-001: Claudio Architecture
 
-**Status:** Draft v1
-**Date:** 2026-09-05
-**Scope:** An orchestrator that runs multiple sandboxed Claude Code sessions in Docker containers, each with a checked-out repository, automatic port forwarding to the host, host-side filesystem access, and interactive terminal attach.
+- **Status:** Draft
+- **Author:** Rodrigo Morales
+- **Created:** 2026-09-05
+- **Updated:** 2026-09-09
+- **Supersedes:** —
+- **Tracking:** Linear project `claudio`
 
----
+## Summary
 
-## 1. Problem statement
+Claudio is an orchestrator that runs multiple sandboxed Claude Code sessions in Docker containers. Each session gets a checked-out repository, automatic port forwarding to the host, host-side filesystem access, and an interactive terminal attach.
+
+The design rests on four load-bearing choices. The host owns the working tree — one clone per repository, one git worktree per session, bind-mounted into the container — so the developer's editor and host `git` work natively against a real directory. State is split so that SQLite records *intent* and Docker records *reality*, which removes drift by construction. Interaction is a real PTY via `docker exec` into tmux rather than a reimplemented chat protocol. And host ports are allocated dynamically from a range rather than mapped statically, which is what allows two instances of the same repository to coexist.
+
+Phase 1 ships as a single Go binary with no daemon; the layering that defers the daemon is specified in [CLI-first, daemon-ready](#cli-first-daemon-ready).
+
+## Motivation
 
 A developer wants to run several Claude Code agents in parallel, each working on its own copy of a repository, without those agents interfering with each other or with the host machine. Each agent needs:
 
@@ -18,9 +27,9 @@ A developer wants to run several Claude Code agents in parallel, each working on
 
 The orchestrator's job is to make creating, tracking, entering, and destroying these environments a single-command operation.
 
----
+### Design principles
 
-## 2. Design principles
+These principles are the tie-breakers invoked throughout the rest of this document.
 
 1. **The host owns the source of truth.** The working tree lives on the host filesystem. Containers are disposable; the repo is not.
 2. **The container is a sandbox, not a pet.** Any instance can be destroyed and rebuilt from `(repo, branch, image)` without losing work that has been committed or that lives in the bind-mounted tree.
@@ -30,9 +39,11 @@ The orchestrator's job is to make creating, tracking, entering, and destroying t
 6. **Fail visible.** Every instance has a status, a health signal, and logs the user can reach without knowing Docker.
 7. **Single-user, local-only.** One operator on one machine; no outside traffic, no shared instances, no multi-tenancy. This is a deliberate scope limit, and it removes whole categories of design: no auth layer, no access control beyond file permissions, no read-only viewers, no network exposure surface. Published ports bind to `127.0.0.1`; the control socket is a Unix socket.
 
----
+## Guide-level explanation
 
-## 3. System overview
+This section is the orientation: what the system is made of, what an instance is, and what the user types. The [Reference-level explanation](#reference-level-explanation) that follows specifies each subsystem in detail.
+
+### System overview
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -71,8 +82,6 @@ The orchestrator's job is to make creating, tracking, entering, and destroying t
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### Components
-
 | Component | Responsibility |
 |---|---|
 | **`claudio` CLI** | User-facing commands. Thin client over the daemon; the only exception is `attach`, which execs `docker exec` directly for a true TTY. |
@@ -84,9 +93,7 @@ The orchestrator's job is to make creating, tracking, entering, and destroying t
 | **State Store** | SQLite on the host. Single writer (the daemon), WAL mode. |
 | **Container image** | A base image with Claude Code, tmux, git, and a language toolchain; extensible per-repo. |
 
----
-
-## 4. Instance model
+### The instance model
 
 An **instance** is the unit the orchestrator manages: one container + one workspace + one Claude Code session + a set of port mappings.
 
@@ -105,7 +112,6 @@ Instance
   ports         []PortMapping
   created_at    timestamp
   last_active   timestamp
-  labels        map[string]string
 ```
 
 ```
@@ -117,7 +123,7 @@ PortMapping
   source         enum        # detected | declared | manual
 ```
 
-### 4.1 Lifecycle
+#### Lifecycle
 
 ```
                   ┌─────────┐
@@ -150,19 +156,72 @@ PortMapping
 The **PROVISIONING** state is a sub-state machine, and each step is idempotent so a crashed daemon can resume:
 
 1. Ensure the repo root exists (clone once if new); create `~/.claudio/instances/<id>/{home,logs}`
-2. Add a git worktree for this session and rewrite its gitdir pointers to relative paths (§5.1)
-3. Detect ports and services (§6)
+2. Add a git worktree for this session and rewrite its gitdir pointers to relative paths ([Workspace layout](#workspace-layout))
+3. Detect ports and services ([Port forwarding](#port-forwarding))
 4. Reserve host ports
 5. Materialize per-instance config (`.claudio/resolved.yml`)
 6. Create the container with mounts and port bindings
 7. Start the container; supervisor launches tmux + Claude Code
 8. Health-probe; transition to RUNNING
 
----
+### CLI surface
 
-## 5. Filesystem and repository strategy
+```
+claudio create <repo> [--branch B | --new-branch B] [--name N] [--env-file F] [--ports c,...]
+                      [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N]
+                      [--clean-on-fail] [--yes] [--no-refresh] [--base-branch B]
+claudio ls [--all] [--json]
+claudio attach <id>
+claudio status <id>
+claudio logs <id> [--service X] [--follow]
+                                         # single-container: streams its container's own
+                                         # logs; compose instance: --service names one
+                                         # sidecar (or the agent), omitted means every
+                                         # service interleaved. No daemon needed — execs
+                                         # straight into `docker logs`/`docker compose logs`.
+claudio ports <id> [--add c] [--remove c]
+claudio stop|start|restart <id> [--fresh]
+claudio rebuild <id> [--fresh]           # rebuild the image, then recreate the container
+                                         # from it — the one path that carries a changed
+                                         # image/entrypoint.sh into a running instance
+claudio destroy <id> [--keep-workspace]
+claudio cd <id>                          # prints the workspace path (shell fn wraps it)
+claudio adopt <container>                # reconcile an untracked container
+claudio forget <container>               # remove an untracked container
+claudio image build [--repo <path>]      # build claudio/base:latest, plus a repo-specific
+                                         # layer when --repo's .claudio.yml declares one
 
-### 5.1 Workspace layout
+./install.sh [--check|--yes|--skip-image] # not a subcommand: the onboarding script. Checks and
+                                         # installs dependencies, builds the binary, puts it on
+                                         # PATH, then runs `image build`. Idempotent.
+
+# phase 2+
+claudio send <id> <prompt>
+claudio open <id> [--service web]
+claudio exec <id> -- <cmd...>
+claudio gc
+claudio daemon [start|stop|status]
+```
+
+**Identity:** the generated ID (`brave-otter`) is permanent and canonical; `--name` sets an optional global-unique alias that resolves to it, and both work anywhere an `<id>` is accepted. Keeping the generated ID canonical is what stops the default branch (`claudio/<instance-id>`) and container names drifting when an instance is renamed. Unambiguous prefixes are accepted.
+
+`claudio cd` matters more than it looks: the answer to "how do I get at the files" should be one command, not a path the user has to remember.
+
+### What the host gets
+
+The host has a real directory at `~/.claudio/repos/<repo>/worktrees/<instance-id>`:
+
+- Open it in any editor or IDE; no remote-container extension required.
+- Run host `git` against it — `diff`, `log`, `add -p` all work natively.
+- `claudio cd <id>` prints the path; a shell function wraps it for `cd $(claudio cd <id>)`.
+
+This is the concrete answer to the "host access to the cloned repo folder" requirement: it is not exported, synced, or copied out — it *is* the working tree, and the container is the thing mounting it.
+
+## Reference-level explanation
+
+### Filesystem and repository strategy
+
+#### Workspace layout
 
 **One clone per repo; one git worktree per session.** The worktree directory is what the container mounts.
 
@@ -187,11 +246,31 @@ The **PROVISIONING** state is a sub-state machine, and each step is idempotent s
 
 Cloning happens once per repo rather than once per instance, so the second and subsequent sessions on a repo are a `git worktree add` — seconds, not minutes — and they share the object store instead of duplicating it.
 
+**Cloned once, but refreshed on every create.** Reusing the clone is what makes the second session fast; it is also what made every session after the first *stale*. `main-clone` was cloned on the first create and never fetched again, so each new worktree branched from whatever the source held at first-clone time and drifted further behind for the life of the repo — silently, since nothing about the resulting worktree looks wrong. Verified in both directions: an inheritance test failed as written and passed after a manual `git fetch` + `git reset --hard`.
+
+`claudio create` refreshes `main-clone` before cutting the worktree. What that means depends on where the commits actually come from:
+
+| Source | On create | Why |
+|---|---|---|
+| A remote URL (`git@github.com:acme/web.git`, HTTPS, or a bare-repo `file://` mirror) | Fetch the base branch and reset to it. No prompt. | The remote is authoritative and the user named it. There is no branch question to ask. |
+| A local working copy that has an `origin` (`claudio create .` in a clone) | Ask which branch, then fetch **that directory's upstream**. | The user is standing in a checkout that could be on any branch; guessing bases the instance on something they did not choose. |
+| A local directory with no `origin`, or `--new` | Skip. Nothing to fetch from. | A prototype has no upstream. |
+
+Three details worth stating, each of which was a wrong first attempt:
+
+- **The upstream is read from the source directory, not from `main-clone`.** Cloning does not copy remotes — verified: `main-clone`'s own `origin` points at the source directory, never at that directory's GitHub. `main-clone` has no record of the real upstream at all.
+- **Classification is redone on every create**, never recorded at create time. That is what lets a prototype which *later* gains an origin (the user pushed it to GitHub) start being refreshed on its next create, with no migration and nothing to re-run.
+- **The refresh is `fetch` + `reset --hard`, not `update-ref`.** Moving the ref alone leaves `main-clone`'s working tree and index stale — verified: that produces a phantom staged deletion for every file the new commits added. This cannot destroy user work: `main-clone` is Claudio-managed, is never handed to a user or a container, and permanently holds the one branch git forbids any worktree from checking out.
+
+`--no-refresh` skips it (offline, or a deliberately pinned clone), and `--base-branch <b>` names the branch non-interactively. An unreachable upstream degrades to a warning and the existing clone rather than failing the create.
+
 It also makes "one instance = one line of work" **structural rather than conventional**: git refuses to check out the same branch in two worktrees, so parallel agents cannot collide on a branch even by mistake. That refusal surfaces as a clear error naming the instance already holding it.
 
 The worktree is a plain host directory — openable in any editor, usable with host `git`. That is the answer to "the host needs access to the folder where the repo is cloned". The root is **configurable**, defaulting to `~/.claudio`.
 
-**Repo source: a remote GitHub URL, or a local directory.** `claudio create` accepts `git@github.com:acme/web.git`, an HTTPS URL (normalized to SSH), or the `acme/web` shorthand. The clone runs **on the host**, using the host's existing SSH setup, which is what lets the container provision without ever holding git credentials (§8).
+#### Repository sources
+
+**A remote GitHub URL, or a local directory.** `claudio create` accepts `git@github.com:acme/web.git`, an HTTPS URL (normalized to SSH), or the `acme/web` shorthand. The clone runs **on the host**, using the host's existing SSH setup, which is what lets the container provision without ever holding git credentials ([Credentials](#credentials)).
 
 `claudio create .` (or any path-shaped argument: `.`, `..`, `./x`, `~/x`, or an absolute path) clones from a **local directory** instead, for local-only or not-yet-pushed work (ROD-115). A directory that is not yet a git repo is `git init`ed and its contents committed first, so unversioned work gets an instance without any setup ceremony.
 
@@ -209,7 +288,9 @@ The path check is deliberately conservative: `acme/web` stays a GitHub shorthand
 
 **Initiatives without an upstream repo get the same structure.** `claudio create --new market-research` creates a root, `git init`s it, and works off a worktree exactly as a cloned repo does. Research, analysis, and writing are not second-class: they get the same isolation, the same real history, and the same diffable output.
 
-**Branch handling** distinguishes the two intents rather than overloading one flag:
+#### Branch handling
+
+Branch handling distinguishes the two intents rather than overloading one flag:
 
 ```
 claudio create acme/web --branch feat/auth        # check out existing
@@ -233,7 +314,7 @@ The suggestion is the requested name with a numeric suffix past any existing col
 
 A worktree's `.git` is a **file**, not a directory: it contains a path to `<root>/main-clone/.git/worktrees/<name>`, which lives *outside* the worktree. Mounting only the worktree therefore breaks git inside the container — verified: `fatal: not a git repository: (null)`.
 
-Four approaches were tested (Appendix B):
+Four approaches were tested ([Appendix B](#appendix-b--git-worktrees-across-the-container-boundary)):
 
 | Approach | Host | Container |
 |---|---|---|
@@ -250,6 +331,8 @@ docker run -v ~/.claudio/repos/<repo>:/repo -w /repo/worktrees/<id> ...
 
 Verified end to end: a commit made inside the container appears immediately on the host, with host git fully functional throughout. Rewriting the pointer to a container-only path is the tempting shortcut and it **breaks the host** — one `.git` file cannot hold two paths, so relative pointers are the only arrangement that satisfies both sides at once.
 
+#### Dependency installation
+
 **Dependency installation is declared, never assumed.** Provisioning runs no implicit `npm install`; a repo that needs one says so:
 
 ```yaml
@@ -258,15 +341,15 @@ post_create:
   - npm ci
 ```
 
-This keeps `create` fast and predictable, and keeps the tool from guessing what a project's setup step should be (§12.4).
+This keeps `create` fast and predictable, and keeps the tool from guessing what a project's setup step should be ([Config schema](#config-schema)).
 
 `home/` is bind-mounted to `/home/agent`. This makes the Claude Code session's own state — conversation transcripts, settings, shell history — durable across container rebuilds and readable from the host.
 
-### 5.2 Dependency directories: bind-mounted, not offloaded
+#### Dependency directories: bind-mounted, not offloaded
 
 Heavy dependency directories (`node_modules`, `.venv`, `target/`) are the worst case for a bind mount: hundreds of thousands of small files that the toolchain then `stat()`s constantly. The obvious optimization is to put them in a Docker named volume, which is genuinely much faster.
 
-**This was investigated in depth and rejected.** The full evidence is in Appendix A; the summary is:
+**This was investigated in depth and rejected.** The full evidence is in [Appendix A](#appendix-a--mount-strategy-evidence); the summary is:
 
 - A named volume is **7–15× faster** on metadata operations (`stat` walks, `grep -r`, `rm -rf`) — measured on this machine, not assumed.
 - On OrbStack the host *can* see into a volume (`~/OrbStack/docker/volumes/<name>`), and a host symlink into it round-trips correctly in both directions. On Docker Desktop it cannot: volumes live inside one opaque disk image.
@@ -278,21 +361,9 @@ So: **bind-mount everything, dependency directories included.** If dependency I/
 
 For repos that genuinely feel the cost, the better answer is upstream: Yarn PnP (or pnpm's `node-linker=pnp`) replaces ~100k small files with one zip per package and uses no hardlinks at all, attacking the root cause instead of routing around it.
 
-### 5.3 What the host gets
+### Port forwarding
 
-The host has a real directory at `~/.claudio/repos/<repo>/worktrees/<instance-id>`:
-
-- Open it in any editor or IDE; no remote-container extension required.
-- Run host `git` against it — `diff`, `log`, `add -p` all work natively.
-- `claudio cd <id>` prints the path; a shell function wraps it for `cd $(claudio cd <id>)`.
-
-This is the concrete answer to the "host access to the cloned repo folder" requirement: it is not exported, synced, or copied out — it *is* the working tree, and the container is the thing mounting it.
-
----
-
-## 6. Port forwarding
-
-### 6.1 Detection
+#### Detection
 
 The orchestrator determines which ports a repo's apps and services listen on, in precedence order (later overrides earlier):
 
@@ -307,7 +378,7 @@ The orchestrator determines which ports a repo's apps and services listen on, in
    | `go.mod` + `net/http` | api | 8080 |
    | `Cargo.toml` + `axum`/`actix` | api | 8080 |
 
-2. **`docker-compose.yml` / `compose.yaml` in the repo** — parse the `ports:` and `expose:` keys of every service. This is the highest-signal source, because it is the repo's own declaration of what it serves. Services here are also candidates to run as sidecar containers (§6.4).
+2. **`docker-compose.yml` / `compose.yaml` in the repo** — parse the `ports:` and `expose:` keys of every service. This is the highest-signal source, because it is the repo's own declaration of what it serves. Services here are also candidates to run as sidecar containers ([Compose-based repositories](#compose-based-repositories)).
 
 3. **`package.json` scripts / Procfile / Makefile** — regex for `--port N`, `-p N`, `PORT=N`.
 
@@ -325,15 +396,15 @@ The orchestrator determines which ports a repo's apps and services listen on, in
        expose: false      # container-internal only, not forwarded to host
    ```
 
-6. **Runtime discovery** — a lightweight watcher inside the container polls `/proc/net/tcp{,6}` for new `LISTEN` sockets. When the agent starts a server on an undetected port, the daemon can bind it on demand (§6.3).
+6. **Runtime discovery** — a lightweight watcher inside the container polls `/proc/net/tcp{,6}` for new `LISTEN` sockets. When the agent starts a server on an undetected port, the daemon can bind it on demand ([Dynamic port binding](#dynamic-port-binding)).
 
 Detection is a *ranked guess*; every mapping records its `source` so `claudio ports <id>` can show the user why a port is mapped and let them correct it with `--add` / `--remove`.
 
 The `--ports` flag on `create` **supplements** detection rather than replacing it, and wins on conflict (recorded as `source: manual`). Wholesale override would force re-declaring every port just to add one; supplementing matches the actual case — "the detected ports are right, I also want the debugger exposed."
 
-`--ports` names **container ports only** (`--ports 9229`, not `9229:9229`). The host side is never the caller's to choose: §6.2's first-free-in-range allocation is what allows a second instance of the same repo to exist at all, so pinning a host port would reintroduce precisely the collision that design eliminates. The `container:host` form is rejected with an error naming the bare form, rather than accepted-and-ignored — a syntax that reads as a pin but silently does nothing is worse than one that refuses.
+`--ports` names **container ports only** (`--ports 9229`, not `9229:9229`). The host side is never the caller's to choose: first-free-in-range allocation is what allows a second instance of the same repo to exist at all, so pinning a host port would reintroduce precisely the collision that design eliminates. The `container:host` form is rejected with an error naming the bare form, rather than accepted-and-ignored — a syntax that reads as a pin but silently does nothing is worse than one that refuses.
 
-### 6.2 Host port allocation
+#### Host port allocation
 
 Static mapping (container 3000 → host 3000) breaks the moment a second instance exists. Instead:
 
@@ -352,7 +423,7 @@ api       8080        http://127.0.0.1:43002  declared (.claudio.yml)
 postgres  5432        —  (not exposed)        declared (.claudio.yml)
 ```
 
-### 6.3 Dynamic port binding
+#### Dynamic port binding
 
 Docker cannot add a port binding to a running container. Two options were considered:
 
@@ -363,9 +434,9 @@ Docker cannot add a port binding to a running container. Two options were consid
 
 Rationale: the container's IP is reachable from the daemon directly on Linux, and on macOS through the runtime's VM network (OrbStack routes container IPs to the host natively; Docker Desktop requires the proxy to dial via the VM). Option B lets a port appear seconds after the agent starts a server, with no session loss. The proxy is ~100 lines (`net.Listen` + `io.Copy` both ways) and its lifetime is tied to the instance.
 
-To keep the common case fast, the *pre-detected* ports from §6.1 are bound natively by Docker at container creation; only *runtime-discovered* ports use the proxy.
+To keep the common case fast, the *pre-detected* ports are bound natively by Docker at container creation; only *runtime-discovered* ports use the proxy.
 
-### 6.4 Compose-based repositories
+#### Compose-based repositories
 
 If the repo has a `docker-compose.yml`, the instance is not a single container but a **compose project**:
 
@@ -379,9 +450,9 @@ If the repo has a `docker-compose.yml`, the instance is not a single container b
 
 This is the main reason the port allocator must rewrite rather than pass through: two instances of the same compose file would both want host 5432.
 
-**Services are sidecars; client tools are in the image.** Postgres, Redis, and Elasticsearch run as their own containers with their own lifecycle and per-instance isolation. What goes *into* the agent image is the tooling that talks to them — `psql`, `redis-cli`, native build dependencies — declared through §7.1's YAML. The agent container should never run the service it is developing against.
+**Services are sidecars; client tools are in the image.** Postgres, Redis, and Elasticsearch run as their own containers with their own lifecycle and per-instance isolation. What goes *into* the agent image is the tooling that talks to them — `psql`, `redis-cli`, native build dependencies — declared through [Image strategy](#image-strategy)'s YAML. The agent container should never run the service it is developing against.
 
-**Docker-in-Docker is not the mechanism.** Nesting a container runtime inside the agent container is explicitly rejected: mounting the host Docker socket is a direct host-root escalation path (§7.4). A repo that genuinely needs the agent to run `docker compose` itself gets a rootless DinD sidecar, opt-in per instance.
+**Docker-in-Docker is not the mechanism.** Nesting a container runtime inside the agent container is explicitly rejected: mounting the host Docker socket is a direct host-root escalation path ([Sandbox posture](#sandbox-posture)). A repo that genuinely needs the agent to run `docker compose` itself gets a rootless DinD sidecar, opt-in per instance.
 
 A repo may also declare services in `.claudio.yml` without shipping a compose file at all; these are synthesized into the same per-instance project:
 
@@ -397,11 +468,9 @@ services:
 
 Sidecar lifecycle is coupled to the instance: `stop` stops the project, `destroy` removes it including sidecar volumes, health appears in `claudio status`, and `claudio logs <id> --service db` reaches sidecar logs — an agent blocked on a database that failed to start should be diagnosable without dropping to `docker ps`.
 
----
+### The container
 
-## 7. The container
-
-### 7.1 Image strategy
+#### Image strategy
 
 **Base image** (`claudio/base`) — `FROM node:22-slim`, plus git, curl, ripgrep, tmux, `tini`, a non-root `agent` user, and the Claude Code CLI. Node is required for Claude Code itself regardless of what the repo needs, so starting from the official Node image beats installing Node onto bare Debian.
 
@@ -429,7 +498,7 @@ The builder generates a Dockerfile from this. Adding Python, Go, or Rust later b
 
 Devcontainer compatibility is a deliberate goal: `.devcontainer/devcontainer.json` already encodes image, features, forwarded ports, and post-create commands. Where it exists, Claudio reads it and treats it as a higher-precedence source than its own detection.
 
-### 7.2 Process model inside the container
+#### Process model inside the container
 
 PID 1 is **`tini`**, with a small supervisor as its child — this gets zombie reaping and signal forwarding for free rather than hand-rolling `SIGCHLD` handling. Claude Code is not PID 1. The supervisor starts:
 
@@ -441,6 +510,7 @@ PID 1 is **`tini`**, with a small supervisor as its child — this gets zombie r
 | **port-watcher** | Polls `/proc/net/tcp` and reports new listeners to the daemon via agent-bridge. |
 
 Claude Code runs inside tmux rather than as PID 1 so that:
+
 - The user can attach and detach without signalling the process.
 - Multiple viewers can attach to the same session simultaneously.
 - The session survives a client disconnect (SSH drop, laptop sleep, terminal close).
@@ -456,45 +526,43 @@ The original bug was the unguarded version of this: with a bare shell as the pan
 
 Two alternatives were tried and rejected. `remain-on-exit on` keeps the session but leaves a *dead* pane, stranding a user who quits while attached on "Pane is dead" with no way to type — worse than the bug it fixed. An unconditional `while true; do claude || bash -l; done` relaunches Claude Code the instant it is quit, so there is no way out of the session at all.
 
-### 7.3 Fast provisioning
+#### Fast provisioning
 
 Cloning a large monorepo per instance is slow. Mitigations:
 
-- **Worktrees, not repeated clones (§5.1).** The repo is cloned once per root; every subsequent session is a `git worktree add` sharing the same object store. Provisioning drops from minutes to seconds without any reference-clone machinery.
+- **Worktrees, not repeated clones.** The repo is cloned once per root; every subsequent session is a `git worktree add` sharing the same object store. Provisioning drops from minutes to seconds without any reference-clone machinery.
 - **Shared package caches.** `~/.claudio/cache/{npm,pip,cargo,go}` is bind-mounted read-write into every container at the toolchain's cache path. Installs in instance N+1 hit a warm cache.
 - **Image prewarming.** The daemon keeps the last-used toolchain images pulled.
 
-### 7.4 Sandbox posture
+#### Sandbox posture
 
 The container is a **security boundary against accident, and a partial boundary against malice.** Explicitly:
 
 - Non-root `agent` user; no `--privileged`; `--cap-drop=ALL` plus only what the toolchain needs.
 - `--security-opt no-new-privileges`.
 - Read-only root filesystem where the toolchain tolerates it, with `tmpfs` for `/tmp`.
-- Memory and CPU limits per instance — **6 GB / 4 CPUs** on this machine, set globally and overridable per repo, and overridable again locally with `claudio create --memory M --cpus N --pids N` (§12.3's three-layer resolution: global < repo < local). `create` reports when a local override changes what the repo's own `.claudio.yml` requested, rather than substituting a different number silently. Sized against the **OrbStack VM's 15.7 GB**, not the host's 36 GB: the VM cap is what containers actually share, and sizing against host RAM overcommits by more than 2×.
+- Memory and CPU limits per instance — **6 GB / 4 CPUs** on this machine, set globally and overridable per repo, and overridable again locally with `claudio create --memory M --cpus N --pids N` ([Configuration layering](#configuration-layering)'s three-layer resolution: global < repo < local). `create` reports when a local override changes what the repo's own `.claudio.yml` requested, rather than substituting a different number silently. Sized against the **OrbStack VM's 15.7 GB**, not the host's 36 GB: the VM cap is what containers actually share, and sizing against host RAM overcommits by more than 2×.
 - PID limit (512) to contain fork bombs.
 - **An exceeded limit must be legible.** Docker exposes `OOMKilled` in container state; `claudio status` reports "killed: out of memory (limit 6g)" with the command to raise it, rather than a bare `STOPPED`. A limit that produces a baffling failure is worse than no limit — the reconciler would otherwise show a stopped container with no cause. `create` also warns when configured limits across running instances would exceed the VM's memory.
 - **No Docker socket mount by default.** Mounting `/var/run/docker.sock` into an agent container is a host-root escalation path. Repos that genuinely need Docker-in-Docker get a rootless DinD sidecar, opt-in per instance.
 - **Network egress policy.** Default: unrestricted (agents need npm, PyPI, GitHub, the Anthropic API). Optional `--network-policy=restricted` attaches the container to a network whose egress passes through a filtering proxy with an allowlist.
-- **Credential scoping** — §8.
+- **Credential scoping** — see [Credentials](#credentials).
 
-The honest caveat: a container is not a VM. A kernel exploit escapes it. For hostile code, the recommendation is a VM boundary (Lima/Colima with a dedicated VM per instance), which the architecture accommodates because the daemon talks to a Docker *endpoint*, not necessarily the local one (§10.2).
+The honest caveat: a container is not a VM. A kernel exploit escapes it. For hostile code, the recommendation is a VM boundary (Lima/Colima with a dedicated VM per instance), which the architecture accommodates because the daemon talks to a Docker *endpoint*, not necessarily the local one ([Remote Docker endpoints](#remote-docker-endpoints)).
 
----
-
-## 8. Credentials
+### Credentials
 
 Three distinct secrets, three different handling rules:
 
 | Secret | Needed by | Approach |
 |---|---|---|
-| **Anthropic subscription token** | Claude Code in the container | One host-held credential from `claude setup-token`, injected at container start as `CLAUDE_CODE_OAUTH_TOKEN`. Stored in the host keychain (fallback `~/.claudio/auth/token`, `0600`). Never written to the workspace or baked into an image. Rotatable by restarting the instance. See §8.1. |
+| **Anthropic subscription token** | Claude Code in the container | One host-held credential from `claude setup-token`, injected at container start as `CLAUDE_CODE_OAUTH_TOKEN`. Stored in the host keychain (fallback `~/.claudio/auth/token`, `0600`). Never written to the workspace or baked into an image. Rotatable by restarting the instance. See [Anthropic authentication](#anthropic-authentication). |
 | **Git credentials** | `git clone`, `git push` | **Clone happens on the host**, using the host's existing git credentials — the container never needs them for provisioning. For agent-initiated pushes, a **credential proxy**: the container's `git` is configured with a credential helper that calls the daemon over the agent-bridge socket; the daemon decides whether to serve the credential, and can require interactive host-side approval for pushes. |
 | **Repo secrets (`.env`)** | The app under test | Copied into the workspace at provision time from a host-side path the user names (`--env-file`). Never committed; `.claudio/` is added to a local `.git/info/exclude`. |
 
 The credential proxy is the important one: it means an agent can push a branch without ever holding a token it could exfiltrate, and every push is attributable and optionally gated.
 
-### 8.1 Anthropic authentication
+#### Anthropic authentication
 
 The credential is a **subscription token**, not a Console API key. `claude setup-token` converts an existing Claude subscription into a long-lived token, so instances bill against the subscription rather than metered API usage. (Verified on the development machine: `claude auth status` reports `authMethod: claude.ai`, `subscriptionType: max`, with no `ANTHROPIC_API_KEY` set.)
 
@@ -505,13 +573,11 @@ Two placement rules matter:
 - **Not under `~/.claude/`.** Claudio must not write into Claude Code's own config tree; a prune or rewrite there would take the credential with it. `~/.claudio/` is already the state directory.
 - **Not per-instance files.** An earlier design minted a credential per container into `~/.claudio/auth/instances/<id>/`. Rejected: `setup-token` takes no arguments — no scope, no expiry, no label — and mints *one* long-lived token, so per-instance directories would hold N copies of the same secret. A file on disk is also no less readable to the agent than an environment variable; the separation buys lifecycle tidiness, not isolation, while adding cleanup paths that leak credentials when missed.
 
-**Known limitation, accepted for phase 1:** this is the same credential in every container. An agent that reads it holds the user's subscription token, and revoking it kills every instance at once. §8's credential proxy is the actual fix — the container holds nothing and the host adds auth to outbound requests — and Anthropic auth should be folded into that same broker alongside git rather than built as a second mechanism.
+**Known limitation, accepted for phase 1:** this is the same credential in every container. An agent that reads it holds the user's subscription token, and revoking it kills every instance at once. The credential proxy above is the actual fix — the container holds nothing and the host adds auth to outbound requests — and Anthropic auth should be folded into that same broker alongside git rather than built as a second mechanism.
 
----
+### Host ↔ session interaction
 
-## 9. Host ↔ session interaction
-
-### 9.1 Attach (primary path)
+#### Attach (primary path)
 
 ```
 $ claudio attach brave-otter
@@ -523,11 +589,11 @@ Execs `docker exec -it claudio-brave-otter tmux new-session -A -s claude`. The u
 
 Both `attach` and `logs` exec with `DOCKER_CLI_HINTS=false`. On exit from an interactive `docker exec -it`, the Docker CLI prints a "What's next: Try Docker Debug ..." promo; because these commands replace the Claudio process outright, that text arrives in the user's terminal as though Claudio had printed it — quitting a session ended with an unprompted `docker debug claudio-<id>` suggestion that is not a Claudio workflow and reads as an error where none occurred. It is prepended rather than appended so a user who sets the variable themselves still wins.
 
-The recreate path passes the same pane command the entrypoint uses (`session.PaneCommand`, §7.2), so a session rebuilt by `attach` comes back running Claude Code rather than dropping the user at a bare container shell. tmux applies that command only when `-A` actually creates the session and ignores it when attaching to an existing one, so an ordinary attach is unaffected.
+The recreate path passes the same pane command the entrypoint uses (`session.PaneCommand`, see [Process model inside the container](#process-model-inside-the-container)), so a session rebuilt by `attach` comes back running Claude Code rather than dropping the user at a bare container shell. tmux applies that command only when `-A` actually creates the session and ignores it when attaching to an existing one, so an ordinary attach is unaffected.
 
 The CLI does *not* proxy this through the daemon. Inserting a daemon hop between two TTYs adds latency and breaks window-resize propagation for no benefit.
 
-### 9.2 Rebuilding an instance onto a new image
+#### Rebuilding an instance onto a new image
 
 `claudio rebuild <id> [--fresh]` builds the image, then re-provisions the instance's container from it — `claudio image build` followed by `claudio restart`, as one verb.
 
@@ -537,9 +603,9 @@ That failure is silent, which is what makes it worth a command: `claudio ls` sho
 
 The summary line reports the drift the rebuild closed (`Image 4e1269969011 -> 98e847299a9f`), and says so explicitly when the image did *not* change — distinguishing "the fix isn't in the image" from "the fix is in, look elsewhere" is the whole diagnostic value.
 
-`--fresh` discards `home/` exactly as it does for `start`/`restart`; the default resumes the existing session (§4.1).
+`--fresh` discards `home/` exactly as it does for `start`/`restart`; the default resumes the existing session.
 
-### 9.3 Non-interactive control
+#### Non-interactive control
 
 For scripting and the web UI, the daemon exposes:
 
@@ -549,11 +615,11 @@ claudio status <id>                        # state, ports, health, last activity
 claudio exec <id> -- <cmd>                 # one-off command in the container
 ```
 
-`claudio logs` (§6.4, §11) ships earlier than the rest of this section: phase 1 already has it as a plain `syscall.Exec` into `docker logs`/`docker compose logs`, no daemon involved — the same "no hop between the CLI and Docker" reasoning as `attach` (§9.1). What the daemon adds later is aggregation across sessions and a stream the web UI can subscribe to without shelling out itself.
+`claudio logs` ships earlier than the rest of this section: phase 1 already has it as a plain `syscall.Exec` into `docker logs`/`docker compose logs`, no daemon involved — the same "no hop between the CLI and Docker" reasoning as `attach`. What the daemon adds later is aggregation across sessions and a stream the web UI can subscribe to without shelling out itself.
 
 `send` writes to the tmux pane via `tmux send-keys`, which is how the session receives input regardless of whether a human is attached.
 
-### 9.4 Activity and attention
+#### Activity and attention
 
 The most valuable signal in a multi-agent setup is *which session needs me*. State comes from **Claude Code hooks**, not from screen-scraping — pattern-matching `tmux capture-pane` output would break whenever the TUI changes, whereas hooks are a supported interface.
 
@@ -582,17 +648,15 @@ wise-heron   docs          fix/links     running  awaiting prompt   43004
 calm-finch   perf-audit    main          running  working           43003
 ```
 
-### 9.5 Web UI (optional, phase 2)
+#### Web UI (optional, phase 2)
 
 The daemon serves an HTTP + WebSocket endpoint. The UI is a dashboard of instance cards (status, attention, port links) with an embedded `xterm.js` terminal per instance, bridged to the same tmux session over a WebSocket. Port links are clickable, opening the forwarded `127.0.0.1:PORT` directly.
 
----
+### State, reconciliation, and failure
 
-## 10. State, reconciliation, and failure
+#### State store
 
-### 10.1 State store
-
-SQLite at `~/.claudio/state.db`, WAL mode. Multi-writer in phase 1 (N CLI processes), single-writer once the daemon exists — see §12.5 for why the concurrency design must assume the former.
+SQLite at `~/.claudio/state.db`, WAL mode. Multi-writer in phase 1 (N CLI processes), single-writer once the daemon exists — see [CLI-first, daemon-ready](#cli-first-daemon-ready) for why the concurrency design must assume the former.
 
 **The governing rule: SQLite stores *intent*; Docker stores *reality*.** Anything Docker already knows authoritatively is derived at query time, never duplicated — two sources of truth drift.
 
@@ -631,7 +695,7 @@ UNIQUE(host_port)
 
 This table is what earns SQLite in phase 1: host port ownership *across* instances is state nothing else tracks, and `UNIQUE(host_port)` is what makes concurrent allocation safe.
 
-`repos` — reference-clone bookkeeping (mirror path, last fetch) for §7.3. `events` — an append-only log of state transitions, provisioning failures with the underlying error text preserved, and port allocations; this is what lets `claudio status` explain *why* something failed rather than only that it did.
+`repos` — reference-clone bookkeeping (mirror path, last fetch) for [Fast provisioning](#fast-provisioning). `events` — an append-only log of state transitions, provisioning failures with the underlying error text preserved, and port allocations; this is what lets `claudio status` explain *why* something failed rather than only that it did.
 
 **Deliberately not stored:** container running/exited status, container IP, image digests, anything from `docker inspect`. `claudio ls` is "select instances → ask Docker about their containers → merge", which is correct by construction when a container is killed out-of-band, rather than depending on reconciliation to notice.
 
@@ -656,11 +720,11 @@ UNTRACKED (1)
 
 Every container is labelled (`claudio.instance.id`, `claudio.repo`, `claudio.created_at`) so state is recoverable from Docker alone if `state.db` is lost.
 
-### 10.2 Remote Docker endpoints
+#### Remote Docker endpoints
 
 The daemon talks to a Docker endpoint via `DOCKER_HOST`. Nothing in the design assumes it is local. This makes two later capabilities cheap: running instances on a beefier remote machine, and per-instance VM isolation via Lima/Colima. The one thing that *does* assume locality is the bind mount — a remote endpoint requires either a synced workspace or accepting volume-only workspaces. Flagged as a known limitation.
 
-### 10.3 Failure modes
+#### Failure modes
 
 | Failure | Behavior |
 |---|---|
@@ -671,75 +735,26 @@ The daemon talks to a Docker endpoint via `DOCKER_HOST`. Nothing in the design a
 | Docker daemon down | CLI reports it plainly and does not hang; instance state is preserved as last-known. |
 | Disk pressure | `claudio gc` prunes destroyed instances, orphaned repo roots, stale worktree metadata (`git worktree prune`), and dangling images. A soft quota warns before provisioning when free space is low. |
 
----
-
-## 11. CLI surface
-
-```
-claudio create <repo> [--branch B | --new-branch B] [--name N] [--env-file F] [--ports c,...]
-                      [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N]
-                      [--clean-on-fail] [--yes]
-claudio ls [--all] [--json]
-claudio attach <id>
-claudio status <id>
-claudio logs <id> [--service X] [--follow]
-                                         # single-container: streams its container's own
-                                         # logs; compose instance: --service names one
-                                         # sidecar (or the agent), omitted means every
-                                         # service interleaved. No daemon needed — execs
-                                         # straight into `docker logs`/`docker compose logs`.
-claudio ports <id> [--add c] [--remove c]
-claudio stop|start|restart <id> [--fresh]
-claudio rebuild <id> [--fresh]           # rebuild the image, then recreate the container
-                                         # from it — the one path that carries a changed
-                                         # image/entrypoint.sh into a running instance
-claudio destroy <id> [--keep-workspace]
-claudio cd <id>                          # prints the workspace path (shell fn wraps it)
-claudio adopt <container>                # reconcile an untracked container
-claudio forget <container>               # remove an untracked container
-claudio image build [--repo <path>]      # build claudio/base:latest, plus a repo-specific
-                                         # layer when --repo's .claudio.yml declares one
-
-./install.sh [--check|--yes|--skip-image] # not a subcommand: the onboarding script. Checks and
-                                         # installs dependencies, builds the binary, puts it on
-                                         # PATH, then runs `image build`. Idempotent.
-
-# phase 2+
-claudio send <id> <prompt>
-claudio open <id> [--service web]
-claudio exec <id> -- <cmd...>
-claudio gc
-claudio daemon [start|stop|status]
-```
-
-**Identity:** the generated ID (`brave-otter`) is permanent and canonical; `--name` sets an optional global-unique alias that resolves to it, and both work anywhere an `<id>` is accepted. Keeping the generated ID canonical is what stops the default branch (`claudio/<instance-id>`) and container names drifting when an instance is renamed. Unambiguous prefixes are accepted.
-
-`claudio cd` matters more than it looks: the answer to "how do I get at the files" should be one command, not a path the user has to remember.
-
----
-
-## 12. Technology choices
+### Implementation choices
 
 | Decision | Choice | Why |
 |---|---|---|
-| Language | **Go** | Single static binary, first-party Docker SDK, good concurrency for the reconciler and N port proxies, trivial cross-compilation. Available on this machine (1.24.5). See §12.2 for the Rust comparison. |
-| Process model | **CLI-first; daemon deferred to phase 2** | Nothing in phase 1 needs a long-lived process. See §12.5. |
-| Container runtime | **Any Docker-API-compatible engine** | The development machine runs **OrbStack**; Docker Desktop and native Linux must also work. Targets the Docker Engine API and probes the runtime at startup (§12.1). |
+| Language | **Go** | Single static binary, first-party Docker SDK, good concurrency for the reconciler and N port proxies, trivial cross-compilation. Available on this machine (1.24.5). See [Go vs Rust](#go-vs-rust). |
+| Process model | **CLI-first; daemon deferred to phase 2** | Nothing in phase 1 needs a long-lived process. See [CLI-first, daemon-ready](#cli-first-daemon-ready). |
+| Container runtime | **Any Docker-API-compatible engine** | The development machine runs **OrbStack**; Docker Desktop and native Linux must also work. Targets the Docker Engine API and probes the runtime at startup. |
 | Container control | **Docker Engine API** via the official SDK | Direct API is more precise than shelling out; the event stream is required for the reconciler. |
 | IPC (phase 2+) | **HTTP + JSON over a Unix domain socket** | Debuggable with `curl --unix-socket`, no protoc in the build, and `logs --follow` works as chunked streaming/SSE. Local-only; file permissions are the access control. |
 | State | **SQLite** (`modernc.org/sqlite`, cgo-free) | Durable, transactional, zero-ops, keeps the static-binary property. |
 | Session multiplexing | **tmux** | Battle-tested detach/reattach, multi-viewer, scrollback. Reimplementing it would be the single biggest source of bugs. |
-| Config | **YAML** (`.claudio.yml`) — Claudio's own schema | Devcontainer and compose files are read as *inputs* and translated (§12.4), but the model is Claudio's own; borrowing their shape would fight the machine/project layering. |
+| Config | **YAML** (`.claudio.yml`) — Claudio's own schema | Devcontainer and compose files are read as *inputs* and translated, but the model is Claudio's own; borrowing their shape would fight the machine/project layering. |
 
----
+#### Runtime detection
 
-### 12.1 Runtime detection
-
-The engine's identity changes the correct mount strategy (§5.3), so the CLI probes it via `/info` and records a **runtime profile**:
+The engine's identity changes the correct mount strategy, so the CLI probes it via `/info` and records a **runtime profile**:
 
 | Detected | Profile | Consequence |
 |---|---|---|
-| `OperatingSystem` contains `OrbStack` | `orbstack` | Fast native bind mounts; host-visible volume paths (§5.3). |
+| `OperatingSystem` contains `OrbStack` | `orbstack` | Fast native bind mounts; host-visible volume paths. |
 | `OperatingSystem` contains `Docker Desktop` | `docker-desktop` | VirtioFS bind mounts; volumes live inside the VM disk image and are **not** host-traversable. |
 | Neither marker, and the CLI process itself runs on `GOOS=linux` | `native` | Bind mounts are ordinary kernel mounts; no penalty, no indirection. |
 | Anything else | `generic` | Conservative defaults: bind-mount everything, no volume tricks. |
@@ -748,21 +763,11 @@ The profile selects mount defaults and gates features that depend on host-visibl
 
 **Two implementation findings, both empirical and both fixed in code before shipping:**
 
-1. **Native Linux cannot be detected from the `OperatingSystem` string alone.** A native Linux daemon reports its *distro name* — `"Ubuntu 22.04.3 LTS"`, `"Debian GNU/Linux 12 (bookworm)"` — and Ubuntu's own string does not contain the substring "linux" at all. The only reliable native-Linux signal is that the CLI process itself is running on `GOOS=linux` with neither VM marker present; the daemon's OS string cannot carry this distinction on its own. An unrecognized OS string reached from a non-Linux host (e.g. a remote Linux daemon dialed from macOS, §10.2) is `generic`, not `native` — those are different situations.
+1. **Native Linux cannot be detected from the `OperatingSystem` string alone.** A native Linux daemon reports its *distro name* — `"Ubuntu 22.04.3 LTS"`, `"Debian GNU/Linux 12 (bookworm)"` — and Ubuntu's own string does not contain the substring "linux" at all. The only reliable native-Linux signal is that the CLI process itself is running on `GOOS=linux` with neither VM marker present; the daemon's OS string cannot carry this distinction on its own. An unrecognized OS string reached from a non-Linux host (e.g. a remote Linux daemon dialed from macOS, see [Remote Docker endpoints](#remote-docker-endpoints)) is `generic`, not `native` — those are different situations.
 
 2. **The endpoint must be resolved through the `docker` CLI's current context, not left to the SDK's default.** Verified on the development machine: the OS-level default socket (`/var/run/docker.sock`) was symlinked to **Docker Desktop's** socket, even though `docker info` and every `docker` command correctly used **OrbStack** — because the `docker` CLI itself reads `currentContext` from `~/.docker/config.json`, and the Docker Go SDK's `client.FromEnv` does not. Resolving the endpoint via `docker context inspect` before falling back to the SDK's default is what makes detection agree with what the user's own `docker` commands actually do; skipping this step silently misclassified `orbstack` as `docker-desktop` on this exact machine.
 
-### 12.2 Go vs Rust
-
-Rust was considered seriously; the call was roughly 60/40.
-
-**For Go:** `github.com/docker/docker/client` is *first-party* — Docker's own daemon and CLI are written in Go, so the API types **are** the Go types. Rust's `bollard` is good and actively maintained, but it is a third-party reimplementation tracking someone else's API. For a tool whose entire job is orchestrating Docker, that asymmetry matters more than it usually would. Goroutines also fit the workload (N port proxies, an event subscriber, a reconciler loop) with less ceremony than `Arc<Mutex<…>>` plumbing.
-
-**For Rust:** better error modelling for this domain — provisioning is a state machine with a dozen distinct failure modes, and `Result` + `thiserror` expresses "which of these went wrong" far more precisely than `if err != nil` chains, for a tool whose value depends on explaining failures clearly. `clap` is also ahead of anything in Go, and `rusqlite` is a nicer binding (with the cgo tradeoff reversed, since it bundles SQLite and still yields a static binary).
-
-Both produce a single static binary and cross-compile cleanly; that is a wash. The decision rests on the first-party SDK, and on this being mostly *coordination* work — shelling to git, calling Docker, moving bytes between sockets — which is Go's sweet spot and is neither performance- nor memory-safety-critical.
-
-### 12.3 Configuration layering
+#### Configuration layering
 
 Configuration resolves in three layers, later winning:
 
@@ -778,13 +783,13 @@ The global baseline applies to every new instance, whether created by cloning a 
 
 **A repo's request must be overridable locally.** "This monorepo needs 12 GB to build" is worth committing; "my VM only has 15.7 GB" is a fact about the machine that has to win. Without the local layer, a repo committing a request larger than the available VM would make the instance unstartable with no recourse. When the local layer overrides a repo's request, `create` says so rather than silently ignoring it.
 
-### 12.4 Config schema
+#### Config schema
 
-Claudio defines its own schema rather than adopting `devcontainer.json`'s. The deciding cases were concrete: `forwardPorts` is a bare integer array with nowhere to express a service name or `expose: false` for a container-internal port, and `hostRequirements` runs the opposite direction from what is needed here — it states a *minimum the host must meet*, where Claudio needs a *ceiling the instance may not exceed*, layered over a machine-level baseline (§12.3). A schema shaped by a tool with one container per repo and no machine layer would have to be fought at every one of those points.
+Claudio defines its own schema rather than adopting `devcontainer.json`'s. The deciding cases were concrete: `forwardPorts` is a bare integer array with nowhere to express a service name or `expose: false` for a container-internal port, and `hostRequirements` runs the opposite direction from what is needed here — it states a *minimum the host must meet*, where Claudio needs a *ceiling the instance may not exceed*, layered over a machine-level baseline. A schema shaped by a tool with one container per repo and no machine layer would have to be fought at every one of those points.
 
 Conventions: **`snake_case` throughout**, no camelCase anywhere. Every list-shaped key is a list, never "string or list". Unknown keys are an error, not silently ignored — a typo in `post_create` should say so rather than quietly doing nothing.
 
-#### `<repo>/.claudio.yml` — what the project needs
+##### `<repo>/.claudio.yml` — what the project needs
 
 Versioned, shared, committed. Every key optional; a repo that declares nothing gets sensible defaults.
 
@@ -819,7 +824,7 @@ resources:                    # what THIS PROJECT needs; overridable locally
   memory: 10g
 ```
 
-#### `~/.claudio/config.yml` — what the machine allows
+##### `~/.claudio/config.yml` — what the machine allows
 
 ```yaml
 workspace_root: ~/.claudio    # where repo roots and instances live
@@ -837,17 +842,17 @@ runtime:
   docker_host: ""             # empty = default endpoint
 ```
 
-`resources` means the same thing in both files, which is what makes the §12.3 layering legible: the repo states a need, the machine states a limit, and the local layer settles it.
+`resources` means the same thing in both files, which is what makes the layering legible: the repo states a need, the machine states a limit, and the local layer settles it.
 
-#### Interop
+##### Interop
 
-`.devcontainer/devcontainer.json` remains a first-class **input**. Where a repo has one it is read and translated into this schema (§7.1, ROD-110), so a repo that already declares its image, ports, and setup needs no `.claudio.yml` at all. Translating at the boundary keeps the interoperability without importing the spec's constraints into the model.
+`.devcontainer/devcontainer.json` remains a first-class **input**. Where a repo has one it is read and translated into this schema (ROD-110), so a repo that already declares its image, ports, and setup needs no `.claudio.yml` at all. Translating at the boundary keeps the interoperability without importing the spec's constraints into the model.
 
-The same applies to `docker-compose.yml`: a repo that ships one has already declared its services, and Claudio uses it directly (§6.4) rather than asking for the same facts twice.
+The same applies to `docker-compose.yml`: a repo that ships one has already declared its services, and Claudio uses it directly rather than asking for the same facts twice.
 
-### 12.5 CLI-first, daemon-ready
+#### CLI-first, daemon-ready
 
-Phase 1 ships **no daemon**. A daemon earns its place with the reconciler (§10.1), the port proxies (§6.3), and the activity monitor (§9.4) — all phase 2+. Building one for phase 1 would mean a serialization round-trip to reach code in the same address space.
+Phase 1 ships **no daemon**. A daemon earns its place with the reconciler, the port proxies, and the activity monitor — all phase 2+. Building one for phase 1 would mean a serialization round-trip to reach code in the same address space.
 
 The layering is what keeps that a deferral rather than a rewrite:
 
@@ -870,9 +875,94 @@ Interface discipline required from day one, so the eventual wire format is not a
 
 **Storage must be multi-process safe from the start.** Phase 1 has N concurrent CLI processes writing one SQLite file; phase 2 has a single writer. Designing for the multi-process case now yields code that stays correct when the daemon arrives — the reverse assumption breaks the moment two `claudio create` calls race for a port. Hence WAL mode, a short busy timeout, `BEGIN IMMEDIATE` on every read-modify-write, and port allocation as **one transaction** (`SELECT free → INSERT reservation → COMMIT`, then `bind()`-probe, releasing on failure) rather than select-then-insert across two statements.
 
-**Known deferral:** with no daemon, nothing watches the Docker event stream, so state converges *lazily* — on the next command that touches an instance. That is the gap §10.1's reconciler closes in phase 2, and it is deliberate.
+## Drawbacks
 
-## 13. Phasing
+The costs this design knowingly accepts:
+
+- **A container is not a VM.** The sandbox stops accidents reliably and malice only partially; a kernel exploit escapes it. Hostile code needs a VM boundary, not this.
+- **One credential in every container** (phase 1). An agent that reads it holds the user's subscription token, and revoking it kills every instance at once. The credential proxy is the fix, and it is not phase 1.
+- **Bind mounts are slower than named volumes** — 7–15× on metadata operations, measured. Repos with very large dependency trees pay that cost, and the design declines the available workaround because the workaround's price is host visibility.
+- **No daemon in phase 1 means lazy convergence.** Nothing watches the Docker event stream, so state catches up only on the next command that touches an instance. A container killed out-of-band is noticed late.
+- **Bind mounts assume a local Docker endpoint.** Everything else in the design is endpoint-agnostic; the workspace mount is the one thing that is not, which constrains the remote-endpoint and per-instance-VM directions.
+- **Detection is a ranked guess.** Ports inferred from framework defaults will sometimes be wrong; the mitigation is that every mapping records its source and is correctable, not that the guess is always right.
+
+## Rationale and alternatives
+
+### Why worktrees rather than a clone per instance
+
+A clone per instance is the obvious model and it is slow on any large repo. Worktrees share one object store, so provisioning drops from minutes to seconds. The second benefit was not the motivation but matters more: git refuses to check out one branch in two worktrees, which makes "one instance = one line of work" structural rather than a convention agents can violate.
+
+### Why bind mounts rather than named volumes
+
+Covered in full under [Dependency directories](#dependency-directories-bind-mounted-not-offloaded). The short version: volumes are measurably much faster, and their cost is that the host cannot properly see the offloaded directory. Host access to the working tree is the reason this project exists, so the faster option is the one that breaks the premise.
+
+### Why tmux rather than a custom PTY multiplexer
+
+Detach/reattach, multi-viewer, scrollback, and client-disconnect survival are exactly tmux's job, and each is a rich source of bugs when hand-rolled. Reimplementing it would be the single biggest source of defects in the project.
+
+### Why attach execs Docker directly rather than proxying through the daemon
+
+Inserting a daemon hop between two TTYs adds latency and breaks window-resize propagation, and buys nothing. `syscall.Exec` replaces the process, which is what yields a genuine TTY with working resize and signals.
+
+### Go vs Rust
+
+Rust was considered seriously; the call was roughly 60/40.
+
+**For Go:** `github.com/docker/docker/client` is *first-party* — Docker's own daemon and CLI are written in Go, so the API types **are** the Go types. Rust's `bollard` is good and actively maintained, but it is a third-party reimplementation tracking someone else's API. For a tool whose entire job is orchestrating Docker, that asymmetry matters more than it usually would. Goroutines also fit the workload (N port proxies, an event subscriber, a reconciler loop) with less ceremony than `Arc<Mutex<…>>` plumbing.
+
+**For Rust:** better error modelling for this domain — provisioning is a state machine with a dozen distinct failure modes, and `Result` + `thiserror` expresses "which of these went wrong" far more precisely than `if err != nil` chains, for a tool whose value depends on explaining failures clearly. `clap` is also ahead of anything in Go, and `rusqlite` is a nicer binding (with the cgo tradeoff reversed, since it bundles SQLite and still yields a static binary).
+
+Both produce a single static binary and cross-compile cleanly; that is a wash. The decision rests on the first-party SDK, and on this being mostly *coordination* work — shelling to git, calling Docker, moving bytes between sockets — which is Go's sweet spot and is neither performance- nor memory-safety-critical.
+
+### Rejected: dynamic port binding by container recreation
+
+Recreating the container when a new port appears is correct and disruptive — it kills the Claude Code session. A userspace TCP proxy on the host is ~100 lines and lets a port appear seconds after the agent starts a server, with no session loss. Recreation remains available as an explicit `--recreate`.
+
+### Rejected: Docker-in-Docker as the sidecar mechanism
+
+Mounting the host Docker socket into an agent container is a direct host-root escalation path. Repos that genuinely need the agent to run `docker compose` get a rootless DinD sidecar, opt-in per instance, rather than the socket.
+
+### Rejected: adopting `devcontainer.json` as Claudio's own schema
+
+Two concrete cases decided it. `forwardPorts` is a bare integer array with nowhere to express a service name or `expose: false`. And `hostRequirements` states a *minimum the host must meet*, where Claudio needs a *ceiling the instance may not exceed* over a machine baseline. Devcontainer files stay first-class **inputs**, translated at the boundary.
+
+### Rejected: per-instance Anthropic credentials
+
+`setup-token` takes no arguments — no scope, no expiry, no label — and mints one long-lived token, so per-instance directories would hold N copies of the same secret while adding cleanup paths that leak credentials when missed.
+
+### Rejected: screen-scraping for activity state
+
+Pattern-matching `tmux capture-pane` output breaks whenever the TUI changes. Claude Code hooks are a supported interface, fire in headless tmux with no client attached, and distinguish permission-blocked from idle — a distinction screen-scraping cannot reliably make.
+
+## Prior art
+
+- **Devcontainers** (VS Code) — the closest neighbour, and the source of two borrowed techniques: build-arg UID/GID matching, and treating `devcontainer.json` as a declaration of image, ports, and post-create commands. The divergence is scope: devcontainers assume one container per repo, one developer, and an editor in the loop, with no machine-level resource layer and no notion of N parallel sessions on the same repository.
+- **`git worktree`** — the mechanism that makes one-clone-many-sessions work, including its branch-exclusivity rule, which this design leans on deliberately rather than working around.
+- **tmux** — session persistence, detach/reattach, and multi-client attach, adopted wholesale rather than reimplemented.
+- **Docker Compose** — per-project namespacing (`-p`) and override files, used directly for sidecar services rather than reinvented.
+- **OrbStack's file sharing** — host-visible volume paths (`~/OrbStack/docker/volumes/<name>`) were the capability that made volume offloading look viable; measuring it is what showed the feature would not port to Docker Desktop.
+
+## Unresolved questions
+
+Resolved items are kept with their resolutions, because the reasoning is the useful part.
+
+1. ~~**Instance ↔ branch coupling.**~~ **Resolved.** An instance is bound to one branch at creation. `--branch` checks out an existing branch, `--new-branch` creates one, and passing neither generates `claudio/<instance-id>`. The generated default is what keeps "one instance = one line of work" true and stops parallel agents colliding on a branch by accident. Nothing prevents the agent from switching branches inside the container; the binding is a default and a naming convention, not an enforcement.
+2. ~~**Session persistence across container rebuild.**~~ **Resolved.** `claudio restart` **resumes** the existing session; `--fresh` opts out. Resuming is the payoff for bind-mounting `home/` at all — without it the mount buys nothing and containers are not really disposable. Contingent on verifying that Claude Code resumes reliably from persisted state in a *new* container (nothing session-critical outside `home/`); if it does not, the fallback is fresh-by-default with `--resume`, taken as an explicit decision rather than a silent degradation.
+3. ~~**Concurrent attach.**~~ **Resolved by scope.** Claudio is **single-user and local-only** — no outside traffic, no shared instances, no second operator. Multiple tmux clients therefore attach to the same session with a shared cursor, and that is correct: one person attaching twice is either deliberate or immediately obvious to them. No read-only mirror, no `-r` mode, no "someone else is attached" warning — all of that would be machinery for a situation that cannot arise. A future web UI is a full client on the same session, not a mirror.
+
+    This scope also underwrites two decisions made elsewhere: binding published ports to `127.0.0.1` rather than `0.0.0.0`, and using a Unix socket with file permissions as the only access control. There is no network exposure surface to reason about.
+4. ~~**Resource defaults.**~~ **Resolved by measurement.** Conservative, overridable defaults: **6 GB memory, 4 CPUs, 512 PIDs** per instance. The measurement that mattered: the host has 36 GB, but **OrbStack's VM is capped at 15.7 GB**, and the VM cap is the budget containers actually share — sizing against host RAM would overcommit by more than 2×. All 12 CPUs pass through, so the CPU figure is deliberate overcommit on the basis that builds are bursty. Adaptive per-instance limits were rejected: a ceiling that changes when a sibling starts is confusing to reason about.
+5. ~~**`.claudio.yml` schema stability.**~~ **Resolved.** Claudio defines **its own schema**, rather than adopting or half-borrowing `devcontainer.json`'s. Two concrete cases decided it: `forwardPorts` is a bare integer array with nowhere to express a service name or `expose: false`, and `hostRequirements` states a *minimum the host must meet* where Claudio needs a *ceiling the instance may not exceed* over a machine baseline — a spec built for one container per repo has no equivalent of that layering. Conventions: `snake_case` throughout, every list-shaped key always a list, unknown keys an error rather than silently ignored. `.devcontainer.json` and `docker-compose.yml` remain first-class *inputs*, translated at the boundary, so nothing already working is reinvented.
+6. ~~**Runtime-conditional behavior.**~~ ~~**Detecting the editing model.**~~ **Both resolved by dropping volume offloading entirely.** With dependency directories always bind-mounted there is no runtime-conditional mount path to support and no editing model to detect — the host always sees the full tree.
+
+Still open:
+
+7. **Remote endpoints and the workspace mount.** A non-local Docker endpoint requires either a synced workspace or accepting volume-only workspaces. Neither has been designed; the limitation is recorded rather than solved.
+8. **Claude Code resume fidelity across a new container.** Item 2's resolution is contingent on it, and the fallback is specified, but the verification has not been done.
+
+## Future possibilities
+
+Phasing, and what each phase unlocks.
 
 **Phase 1 — Core loop.** `create`/`ls`/`attach`/`destroy`, bind-mounted clone, statically detected ports, SQLite state, tmux attach — **plus compose sidecars**. No daemon.
 
@@ -884,24 +974,11 @@ Sidecars are phase 1 rather than a later enhancement because most real repos nee
 
 **Phase 4 — Surface and scale.** Web UI, remote Docker endpoints, credential proxy with push approval, network egress policy, per-instance VM isolation.
 
----
-
-## 14. Open questions
-
-1. ~~**Instance ↔ branch coupling.**~~ **Resolved.** An instance is bound to one branch at creation. `--branch` checks out an existing branch, `--new-branch` creates one, and passing neither generates `claudio/<instance-id>`. The generated default is what keeps "one instance = one line of work" true and stops parallel agents colliding on a branch by accident. Nothing prevents the agent from switching branches inside the container; the binding is a default and a naming convention, not an enforcement.
-2. ~~**Session persistence across container rebuild.**~~ **Resolved.** `claudio restart` **resumes** the existing session; `--fresh` opts out. Resuming is the payoff for bind-mounting `home/` at all — without it the mount buys nothing and containers are not really disposable. Contingent on verifying that Claude Code resumes reliably from persisted state in a *new* container (nothing session-critical outside `home/`); if it does not, the fallback is fresh-by-default with `--resume`, taken as an explicit decision rather than a silent degradation.
-3. ~~**Concurrent attach.**~~ **Resolved by scope.** Claudio is **single-user and local-only** — no outside traffic, no shared instances, no second operator. Multiple tmux clients therefore attach to the same session with a shared cursor, and that is correct: one person attaching twice is either deliberate or immediately obvious to them. No read-only mirror, no `-r` mode, no "someone else is attached" warning — all of that would be machinery for a situation that cannot arise. A future web UI is a full client on the same session, not a mirror.
-
-    This scope also underwrites two decisions made elsewhere: binding published ports to `127.0.0.1` rather than `0.0.0.0` (§6.2), and using a Unix socket with file permissions as the only access control (§12). There is no network exposure surface to reason about.
-4. ~~**Resource defaults.**~~ **Resolved by measurement.** Conservative, overridable defaults: **6 GB memory, 4 CPUs, 512 PIDs** per instance (§7.4). The measurement that mattered: the host has 36 GB, but **OrbStack's VM is capped at 15.7 GB**, and the VM cap is the budget containers actually share — sizing against host RAM would overcommit by more than 2×. All 12 CPUs pass through, so the CPU figure is deliberate overcommit on the basis that builds are bursty. Adaptive per-instance limits were rejected: a ceiling that changes when a sibling starts is confusing to reason about.
-5. ~~**`.claudio.yml` schema stability.**~~ **Resolved.** Claudio defines **its own schema** (§12.4), rather than adopting or half-borrowing `devcontainer.json`'s. Two concrete cases decided it: `forwardPorts` is a bare integer array with nowhere to express a service name or `expose: false`, and `hostRequirements` states a *minimum the host must meet* where Claudio needs a *ceiling the instance may not exceed* over a machine baseline (§12.3) — a spec built for one container per repo has no equivalent of that layering. Conventions: `snake_case` throughout, every list-shaped key always a list, unknown keys an error rather than silently ignored. `.devcontainer.json` and `docker-compose.yml` remain first-class *inputs*, translated at the boundary (§7.1, §6.4), so nothing already working is reinvented.
-6. ~~**Runtime-conditional behavior.**~~ ~~**Detecting the editing model.**~~ **Both resolved by dropping volume offloading entirely (§5.2).** With dependency directories always bind-mounted there is no runtime-conditional mount path to support and no editing model to detect — the host always sees the full tree.
-
----
+**Known deferral:** with no daemon in phase 1, nothing watches the Docker event stream, so state converges *lazily* — on the next command that touches an instance. That is the gap the reconciler closes in phase 2, and it is deliberate.
 
 ## Appendix A — Mount strategy evidence
 
-All claims in §5.3 were verified on the development machine on 2026-09-05 rather than taken from documentation. Environment: OrbStack (server 29.4.0, client 28.3.2), macOS 26.5.2, Apple Silicon, 16 GB. Docker Desktop is installed but was not the active context — an easy misread, since `docker --version` reports the *client*.
+All claims about mount strategy were verified on the development machine on 2026-09-05 rather than taken from documentation. Environment: OrbStack (server 29.4.0, client 28.3.2), macOS 26.5.2, Apple Silicon, 16 GB. Docker Desktop is installed but was not the active context — an easy misread, since `docker --version` reports the *client*.
 
 **Verified on OrbStack**
 
@@ -924,7 +1001,7 @@ All claims in §5.3 were verified on the development machine on 2026-09-05 rathe
 - `ln` across the boundary fails with `EXDEV: Cross-device link`.
 - `inotify` events propagate from host writes across the bind mount.
 
-Benchmark methodology: 3000 small files, three runs each, comparing bind mount / named volume / container overlay. Results in §5.3.1. Corroborating published data: Mainardi's 2025 macOS Docker benchmarks (~2.5× on `npm install`; Docker-VZ 9.53 s vs 3.61 s hybrid).
+Benchmark methodology: 3000 small files, three runs each, comparing bind mount / named volume / container overlay. Corroborating published data: Mainardi's 2025 macOS Docker benchmarks (~2.5× on `npm install`; Docker-VZ 9.53 s vs 3.61 s hybrid).
 
 Test volumes and directories were removed after measurement.
 
@@ -938,8 +1015,6 @@ Test volumes and directories were removed after measurement.
 - [pnpm FAQ](https://pnpm.io/faq) · [pnpm#5318](https://github.com/pnpm/pnpm/issues/5318)
 - [vscode-remote-release#3008](https://github.com/microsoft/vscode-remote-release/issues/3008) · [#6669](https://github.com/microsoft/vscode-remote-release/issues/6669) (root-owned leftover directory)
 - OrbStack file sharing: `~/OrbStack/README.txt`, [orb.cx/docker-mount](https://orb.cx/docker-mount)
-
----
 
 ## Appendix B — Git worktrees across the container boundary
 
@@ -988,4 +1063,4 @@ Confirmed working end to end: host `git status` and `git rev-parse --abbrev-ref 
 **Also verified:**
 
 - Git refuses to check out one branch in two worktrees — `fatal: 'claudio/brave-otter' is already checked out at '…'`. This is what makes "one instance = one line of work" structural rather than conventional.
-- A UID mismatch triggers git's `safe.directory` protection; §7.1's build-arg UID matching is the primary defense, with a `safe.directory` entry in the image as a backstop.
+- A UID mismatch triggers git's `safe.directory` protection; build-arg UID matching is the primary defense, with a `safe.directory` entry in the image as a backstop.
