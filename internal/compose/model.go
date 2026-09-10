@@ -43,6 +43,34 @@ type DeclaredPort struct {
 	ContainerPort int
 }
 
+// LoadServiceNames returns every service the compose file declares, in
+// sorted order — the set of services that must join the per-instance
+// network, which is deliberately *not* the same set as
+// LoadDeclaredPorts' (ROD-129).
+//
+// The distinction is the bug this exists to fix. LoadDeclaredPorts
+// answers "what needs a host port allocated," so a service with no
+// `ports:` key is correctly absent from it. Using that as the list of
+// services to attach to the network meant an internal-only sidecar —
+// the ordinary shape for a Postgres or Redis nothing publishes — never
+// got a `networks:` entry, stayed on Compose's implicit `_default`
+// network, and so could not be reached by name from the agent at all,
+// contradicting §6.4's central promise.
+//
+// Existence and publishing are separate questions; this answers the
+// first one.
+func LoadServiceNames(composeFilePath string) ([]string, error) {
+	data, err := os.ReadFile(composeFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("compose: read %s: %w", composeFilePath, err)
+	}
+	var f file
+	if err := yaml.Unmarshal(data, &f); err != nil {
+		return nil, fmt.Errorf("compose: parse %s: %w", composeFilePath, err)
+	}
+	return sortedKeys(f.Services), nil
+}
+
 // LoadDeclaredPorts parses composeFilePath (as returned by
 // FindComposeFile) and returns every port each service publishes, in
 // service-then-declaration order — the allocator's input for "rewrite

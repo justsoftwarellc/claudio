@@ -102,22 +102,49 @@ func provisionCompose(ctx context.Context, st CreateStore, composeFilePath strin
 	project = compose.ProjectName(id)
 	network := project + "_net"
 
-	var sidecarNames []string
 	var rewrites []compose.PortRewrite
-	seen := make(map[string]bool)
 	for _, p := range ports {
-		seen[p.ServiceName] = true
 		rewrites = append(rewrites, compose.PortRewrite{Service: p.ServiceName, ContainerPort: p.Container, HostPort: p.HostPort})
 	}
-	for name := range seen {
+
+	// Every service that EXISTS joins the network, which is a different
+	// question from which ones publish a port (ROD-129). Deriving this
+	// from `ports` alone left a sidecar with no `ports:` key — the
+	// ordinary shape for an internal-only Postgres or Redis — off the
+	// per-instance network entirely, on Compose's implicit _default
+	// instead, so the agent could not reach it by name at all.
+	seen := make(map[string]bool)
+	var sidecarNames []string
+	addSidecar := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
 		sidecarNames = append(sidecarNames, name)
+	}
+
+	if composeFilePath != "" {
+		names, err := compose.LoadServiceNames(composeFilePath)
+		if err != nil {
+			return "", "", coreerr.Wrap(coreerr.InvalidInput, "compose: load service names", err)
+		}
+		for _, name := range names {
+			addSidecar(name)
+		}
 	}
 
 	// .claudio.yml services: are internal-only by design (reached by
 	// service name — config.Service has no ports field, see its doc) so
 	// they need no allocation, only a name to attach to the network.
 	for _, svc := range repoCfg.Services {
-		sidecarNames = append(sidecarNames, svc.Name)
+		addSidecar(svc.Name)
+	}
+
+	// A port allocated for a service the compose file no longer declares
+	// would otherwise silently lose its network override; keep the two
+	// sources unioned rather than assuming one subsumes the other.
+	for _, p := range ports {
+		addSidecar(p.ServiceName)
 	}
 
 	override, err := compose.GenerateOverride(network, sidecarNames, rewrites, compose.AgentSpec{
