@@ -97,6 +97,9 @@ func LoadGlobalConfig(path string) (GlobalConfig, error) {
 	if fromFile.Runtime.DockerHost != "" {
 		cfg.Runtime.DockerHost = fromFile.Runtime.DockerHost
 	}
+	if fromFile.Editor != "" {
+		cfg.Editor = fromFile.Editor
+	}
 	return cfg, nil
 }
 

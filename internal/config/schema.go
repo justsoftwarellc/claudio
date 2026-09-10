@@ -157,6 +157,24 @@ type GlobalConfig struct {
 	Resources     Resources     `yaml:"resources,omitempty"`
 	Ports         PortsConfig   `yaml:"ports,omitempty"`
 	Runtime       RuntimeConfig `yaml:"runtime,omitempty"`
+	// Editor is the binary `claudio open` launches against a worktree
+	// (ROD-130) — a bare name resolved on PATH, or an absolute path.
+	//
+	// Global-only, and deliberately not a RepoConfig field: which editor
+	// a human uses is a property of the person and the machine, not of
+	// the project, so it must not arrive with a clone. That is the same
+	// split the package doc draws between "the repo states a need" and
+	// "the machine states a limit".
+	//
+	// A bare binary rather than a command string: the value is handed to
+	// exec.LookPath and invoked as `<editor> <worktree>`, so there is no
+	// splitting or quoting layer to get wrong on a path with spaces.
+	// Editors wanting flags (`code -n`) are the case this trades away.
+	//
+	// Empty means unset, which is not an error until `claudio open` is
+	// actually run — see cmdOpen on why the requirement bites at first
+	// use rather than at install or on every command.
+	Editor string `yaml:"editor,omitempty"`
 }
 
 // Defaults returns the global config's built-in defaults before any file

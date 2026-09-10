@@ -111,6 +111,21 @@ prints the instance's workspace path — a plain directory on your host, openabl
 cdc() { cd "$(claudio cd "$1")"; }
 ```
 
+To open that directory in your editor instead of `cd`-ing into it:
+
+```bash
+claudio open brave-otter
+```
+
+This needs an editor configured once, which `install.sh` offers to do for you:
+
+```bash
+claudio config set editor code   # or cursor, subl, zed, nvim, …
+claudio config get editor
+```
+
+The setting lives in [`~/.claudio/config.yml`](#claudioyml-and-configyml) as `editor:` — machine-level, not per-repo, since which editor you use is a property of your machine rather than of the project. It's a bare binary name (resolved on `PATH`) or an absolute path; arguments aren't supported.
+
 Workspaces live under `~/.claudio/repos/<repo-slug>/worktrees/<instance-id>/` (see [Repo layout](#repo-layout) for why repos and worktrees are split). The container mounts the whole repo root, not just the worktree — that's what makes the worktree's `.git` file resolve correctly inside the container.
 
 ### Ports
@@ -346,6 +361,7 @@ claudio image build --repo /path/to/your/clone
 
 ```yaml
 workspace_root: ~/.claudio     # where repos/worktrees/state live
+editor: code                    # what `claudio open` launches; bare binary or absolute path
 resources:
   memory: 6g
   cpus: 4
@@ -356,6 +372,8 @@ ports:
 runtime:
   docker_host: ""                # pin a specific Docker endpoint; empty auto-detects
 ```
+
+`editor` has no default — `claudio open` asks you to set one the first time you run it, and every other command works without it. Set it with `claudio config set editor <binary>` rather than hand-editing, which validates the binary resolves on `PATH` before writing.
 
 ## Untracked containers
 

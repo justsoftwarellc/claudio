@@ -107,14 +107,23 @@ func cmdConfigRestore(ctx context.Context, args []string) int {
 // same shape `claudio image build` already established.
 func cmdConfig(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "claudio config: expected a subcommand\n\nUsage:\n  claudio config restore [<id>] [--json]")
+		fmt.Fprintln(os.Stderr, "claudio config: expected a subcommand\n\n"+configUsage)
 		return 1
 	}
 	switch args[0] {
 	case "restore":
 		return cmdConfigRestore(ctx, args[1:])
+	case "set":
+		return cmdConfigSet(ctx, args[1:])
+	case "get":
+		return cmdConfigGet(ctx, args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "claudio config: unknown subcommand %q\n\nUsage:\n  claudio config restore [<id>] [--json]\n", args[0])
+		fmt.Fprintf(os.Stderr, "claudio config: unknown subcommand %q\n\n%s\n", args[0], configUsage)
 		return 1
 	}
 }
+
+const configUsage = `Usage:
+  claudio config restore [<id>] [--json]
+  claudio config set editor <binary>
+  claudio config get editor`

@@ -241,6 +241,76 @@ ensure_claude_cli() {
 	return 1
 }
 
+# ---------------------------------------------------------------- editor
+#
+# `claudio open` needs an editor configured (ROD-130). It is asked for here
+# because this is the one moment we already have the user's attention and a
+# tty; every other path leaves them to discover the setting from an error.
+#
+# Never fatal, and never blocking: an unset editor only affects `claudio
+# open`, so --yes, --check, and a piped-in shell all fall through to
+# $EDITOR-or-nothing rather than stopping an install that is otherwise fine.
+
+# Editors worth suggesting, GUI first — someone typing `claudio open` wants
+# a window, and a terminal editor is the answer only if it's the one they
+# actually configured.
+EDITOR_CANDIDATES=(code cursor subl zed nvim vim)
+
+ensure_editor() {
+	# Already set is the common case on a re-run; installs are re-run often
+	# enough that re-asking would be its own annoyance.
+	local current
+	if current="$("$BIN_DIR/claudio" config get editor 2>/dev/null)" && [ -n "$current" ]; then
+		ok "editor: $current"
+		return 0
+	fi
+
+	local suggestion=""
+	for candidate in "${EDITOR_CANDIDATES[@]}"; do
+		if command -v "$candidate" >/dev/null 2>&1; then
+			suggestion="$candidate"
+			break
+		fi
+	done
+	# $EDITOR is a weaker signal than a detected GUI editor (it is usually
+	# vi, meaning "edit this commit message", not "open this project"), so
+	# it is the fallback rather than the first choice.
+	if [ -z "$suggestion" ] && [ -n "${EDITOR:-}" ]; then
+		suggestion="$(basename "${EDITOR%% *}")"
+	fi
+
+	if [ -z "$suggestion" ]; then
+		warn "No editor detected for \`claudio open\`"
+		info "Set one later: claudio config set editor <binary>"
+		return 0
+	fi
+
+	# Non-interactive (--yes, --check, piped): take the suggestion silently
+	# rather than prompting into a void or leaving it unset.
+	if [ "$ASSUME_YES" -eq 1 ] || [ ! -t 0 ]; then
+		if "$BIN_DIR/claudio" config set editor "$suggestion" >/dev/null 2>&1; then
+			ok "editor: $suggestion"
+		else
+			info "Set one later: claudio config set editor <binary>"
+		fi
+		return 0
+	fi
+
+	local reply
+	printf '  %s?%s Editor for \`claudio open\` [%s] ' "$YELLOW" "$RESET" "$suggestion"
+	read -r reply </dev/tty || reply=""
+	[ -z "$reply" ] && reply="$suggestion"
+
+	if "$BIN_DIR/claudio" config set editor "$reply" >/dev/null 2>&1; then
+		ok "editor: $reply"
+	else
+		# claudio itself rejects a binary that isn't on PATH, which is the
+		# check we want; just don't let it fail the install.
+		warn "Could not set editor to \"$reply\" (not found on PATH?)"
+		info "Set one later: claudio config set editor <binary>"
+	fi
+}
+
 # ---------------------------------------------------------------- git/ssh
 
 ensure_git() {
@@ -371,6 +441,9 @@ if resolved="$(command -v claudio 2>/dev/null)"; then
 		warn "\`claudio\` resolves to $resolved, not the build at $BIN_DIR/claudio"
 	fi
 fi
+
+step "Editor"
+ensure_editor
 
 if [ "$SKIP_IMAGE" -eq 1 ]; then
 	step "Base image"

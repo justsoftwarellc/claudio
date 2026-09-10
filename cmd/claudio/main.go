@@ -37,6 +37,8 @@ func run(args []string) int {
 		return cmdDestroy(ctx, args[1:])
 	case "cd":
 		return cmdCd(ctx, args[1:])
+	case "open":
+		return cmdOpen(ctx, args[1:])
 	case "status":
 		return cmdStatus(ctx, args[1:])
 	case "ports":
@@ -87,6 +89,8 @@ Usage:
                                    stream a container's logs (compose instances:
                                    --service names one sidecar, or every service)
   claudio cd [<id>]               print an instance's workspace path
+  claudio open [<id>]             open an instance's workspace in the configured
+                                   editor (set it with: claudio config set editor)
   claudio status [<id>]           show one instance's detail view
   claudio ports [<id>] [--add c] [--remove c]
                                    show or amend an instance's port mappings
@@ -105,6 +109,9 @@ Usage:
   claudio config restore [<id>] [--json]
                                    rewrite an instance's ~/.claude.json when Claude
                                    Code refuses to start against it (invalid JSON)
+  claudio config set editor <binary>
+                                   set the editor "claudio open" launches
+  claudio config get editor       print the configured editor
   claudio image build [--repo <path>]
                                    build claudio/base:latest (and a repo-specific
                                    layer, if --repo's .claudio.yml asks for one)

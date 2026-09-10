@@ -24,6 +24,21 @@ prints the instance's workspace path — a plain directory on your host, openabl
 cdc() { cd "$(claudio cd "$1")"; }
 ```
 
+To open that directory in your editor instead of `cd`-ing into it:
+
+```bash
+claudio open brave-otter
+```
+
+This needs an editor configured once, which `install.sh` offers to do for you:
+
+```bash
+claudio config set editor code   # or cursor, subl, zed, nvim, …
+claudio config get editor
+```
+
+The setting lives in [`~/.claudio/config.yml`](./configuration.md) as `editor:` — machine-level, not per-repo, since which editor you use is a property of your machine rather than of the project. It's a bare binary name (resolved on `PATH`) or an absolute path; arguments aren't supported.
+
 Workspaces live under `~/.claudio/repos/<repo-slug>/worktrees/<instance-id>/`. The container mounts the whole repo root, not just the worktree — that's what makes the worktree's `.git` file resolve correctly inside the container.
 
 ## Ports
