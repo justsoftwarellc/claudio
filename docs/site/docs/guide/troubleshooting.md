@@ -2,6 +2,8 @@
 
 **"every host port in N-M is taken"** — the configured port range is exhausted. Either widen `ports.range` in `~/.claudio/config.yml`, or free some up: `claudio ls` to see what's running, `claudio destroy` anything you don't need.
 
+**Something in the setup is broken and you're not sure what** — `./install.sh --check` reports the state of every dependency without changing anything, and a plain `./install.sh` repairs what it finds (it skips whatever is already in place).
+
 **"the container runtime is unreachable"** — Docker (or OrbStack) isn't running, or claudio can't reach it. Run `docker info` yourself first; if that works but claudio still can't connect, check `runtime.docker_host` in your config.
 
 **Container exited immediately / "stopped (out of memory)"** — `claudio ls`/`claudio status` will say if it was an OOM kill specifically. Raise the limit with `--memory` on `create`, or in `.claudio.yml`'s `resources:`.

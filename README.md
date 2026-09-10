@@ -4,20 +4,49 @@ claudio runs several [Claude Code](https://claude.ai/code) sessions in parallel,
 
 ## Requirements
 
+[`./install.sh`](#install) checks for all of these and installs what's missing,
+so you don't need to work through this list by hand:
+
 - A Docker-API-compatible container runtime. **[OrbStack](https://orbstack.dev/) is recommended** on macOS; Docker Desktop and native Linux Docker are also supported.
 - A Claude subscription, and the `claude` CLI installed (`claude setup-token` — see [Getting started](#getting-started) below).
-- SSH access to the repos you want to work in (claudio clones over `git@host:path`, `ssh://`, or `https://` — see [Cloning](#cloning)).
 - Go 1.25+ to build claudio itself (no prebuilt binary yet).
+
+One thing it can't do for you: SSH access to the repos you want to work in
+(claudio clones over `git@host:path`, `ssh://`, or `https://` — see [Cloning](#cloning)).
 
 ## Install
 
 ```bash
 git clone <this-repo>
 cd claudio
+./install.sh
+```
+
+That checks for everything claudio needs (Homebrew, git, Go, a container
+runtime, the `claude` CLI), installs whatever's missing, builds the binary,
+puts it on your `PATH`, and builds the base image. It's safe to re-run — every
+step skips what's already done, so it doubles as a repair tool when one piece
+has drifted.
+
+| Flag | |
+|---|---|
+| `./install.sh --check` | report what's missing, change nothing |
+| `./install.sh --yes` | never prompt, install missing dependencies |
+| `./install.sh --skip-image` | skip the (slow) base image build |
+
+<details>
+<summary>Installing by hand instead</summary>
+
+The script automates exactly these steps. Do them yourself if you want the
+binary somewhere else, or you'd rather install the dependencies your own way.
+
+Build to `~/go/bin` (or your `GOPATH`/`GOBIN`), which needs no `sudo`:
+
+```bash
 go build -o "$(go env GOPATH)/bin/claudio" ./cmd/claudio
 ```
 
-That installs to `~/go/bin` (or your `GOPATH`/`GOBIN`), which needs no `sudo`. If `claudio` isn't found afterwards, that directory isn't on your `PATH` — add it:
+If `claudio` isn't found afterwards, that directory isn't on your `PATH` — add it:
 
 ```bash
 export PATH="$(go env GOPATH)/bin:$PATH"   # add to ~/.zshrc to make it stick
@@ -35,7 +64,11 @@ Then build the base image every instance runs on:
 claudio image build
 ```
 
-This builds `claudio/base:latest` (Node, git, tmux, Claude Code, matched to your host UID/GID) once. Re-run it after pulling changes to `image/`; Docker's layer cache makes a no-op rebuild nearly free.
+</details>
+
+The base image is `claudio/base:latest` (Node, git, tmux, Claude Code, matched
+to your host UID/GID). Re-run `claudio image build` after pulling changes to
+`image/`; Docker's layer cache makes a no-op rebuild nearly free.
 
 ## The 60-second path
 
@@ -310,6 +343,8 @@ If claudio's state database is lost, rebuilt from a backup, or a container is cr
 ## Troubleshooting
 
 **"every host port in N-M is taken"** — the configured port range is exhausted. Either widen `ports.range` in `~/.claudio/config.yml`, or free some up: `claudio ls` to see what's running, `claudio destroy` anything you don't need.
+
+**Something in the setup is broken and you're not sure what** — `./install.sh --check` reports the state of every dependency without changing anything, and a plain `./install.sh` repairs what it finds (it skips whatever is already in place).
 
 **"the container runtime is unreachable"** — Docker (or OrbStack) isn't running, or claudio can't reach it. Run `docker info` yourself first; if that works but claudio still can't connect, check `runtime.docker_host` in your config.
 

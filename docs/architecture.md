@@ -443,6 +443,8 @@ The builder generates a Dockerfile from this. Adding Python, Go, or Rust later b
 
 **Building is explicit, never a side effect of `create`.** `claudio image build [--repo <path>]` is its own verb; `create` only *resolves* which image an instance needs and fails with an actionable error naming the exact build command when it is missing. A multi-minute, network-dependent Docker build must not happen as a surprise inside what the user asked to be a fast provisioning step. The per-repo tag is derived from the repo's identity (its `origin` remote where parseable, else a `file://` path form), so `image build --repo <clone>` and a later `create <same-url>` land on the same tag without either command knowing about the other.
 
+**The installer runs it; `create` still does not.** `./install.sh` builds the base image as its last step, which is not an exception to the rule above — it is the rule working. Onboarding is exactly the moment a multi-minute build *is* what the user asked for, so it happens there, once, where it is announced and skippable (`--skip-image`), rather than ambushing the first `create`. The invariant is unchanged: no command that is supposed to be fast ever builds an image.
+
 Devcontainer compatibility is a deliberate goal: `.devcontainer/devcontainer.json` already encodes image, features, forwarded ports, and post-create commands. Where it exists, Claudio reads it and treats it as a higher-precedence source than its own detection.
 
 ### 7.2 Process model inside the container
@@ -715,6 +717,10 @@ claudio adopt <container>                # reconcile an untracked container
 claudio forget <container>               # remove an untracked container
 claudio image build [--repo <path>]      # build claudio/base:latest, plus a repo-specific
                                          # layer when --repo's .claudio.yml declares one
+
+./install.sh [--check|--yes|--skip-image] # not a subcommand: the onboarding script. Checks and
+                                         # installs dependencies, builds the binary, puts it on
+                                         # PATH, then runs `image build`. Idempotent.
 
 # phase 2+
 claudio send <id> <prompt>
