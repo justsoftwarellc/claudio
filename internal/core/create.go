@@ -103,6 +103,27 @@ type CreateParams struct {
 	// a failure before that point (branch resolution, worktree creation
 	// itself) has nothing to clean up.
 	CleanOnFail bool `json:"clean_on_fail,omitempty"`
+
+	// BaseBranch is the upstream branch main-clone is refreshed to
+	// before this instance's worktree is cut, closing the staleness gap
+	// where every create after the first branched from whatever the
+	// source held at first-clone time (see repo.RefreshMainClone).
+	//
+	// Empty means "use main-clone's current branch", which is the right
+	// default for a remote source: the user named the repo, not a
+	// branch, so its default branch is what they meant. A local source
+	// with an upstream is the case that needs this set explicitly — the
+	// CLI confirms the branch with the user before calling, because a
+	// working copy can be sitting on any branch and guessing would base
+	// the instance on something the user did not choose.
+	BaseBranch string `json:"base_branch,omitempty"`
+
+	// SkipRefresh suppresses the refresh entirely. Set for a resumed or
+	// re-provisioned create (StartInstance/RestartInstance reuse this
+	// same params struct) where the worktree already exists and moving
+	// main-clone underneath it would change nothing, and for a caller
+	// that has already decided not to reach the network.
+	SkipRefresh bool `json:"skip_refresh,omitempty"`
 }
 
 // CreateResult is what a caller (the CLI) needs to report success.
@@ -175,6 +196,9 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 	} else {
 		root, err = repo.EnsureRoot(ctx, params.WorkspaceRoot, params.RepoURL)
 		if err != nil {
+			return CreateResult{}, coreerr.Wrap(coreerr.CloneFailed, op, err)
+		}
+		if err := refreshBase(ctx, root, params, progress); err != nil {
 			return CreateResult{}, coreerr.Wrap(coreerr.CloneFailed, op, err)
 		}
 		branch, newBranch, err = resolveBranch(ctx, root, id, params)
@@ -707,6 +731,54 @@ func resolveBranch(ctx context.Context, root repo.Root, id string, params Create
 	default:
 		return "claudio/" + id, true, nil
 	}
+}
+
+// refreshBase brings main-clone up to date with the source before a
+// worktree is cut from it — the fix for the gap where main-clone was
+// cloned once and never fetched again, so every instance after the
+// first silently branched from first-clone state (verified: an
+// inheritance test failed as-is and passed after a manual fetch+reset).
+//
+// What it does depends on where the source's commits come from
+// (repo.ClassifySource):
+//
+//   - A remote URL the user named: always refresh, no prompt. The
+//     remote is authoritative and was asked for by name.
+//   - A local directory that is itself a clone: refresh from that
+//     directory's own upstream, on the branch the caller resolved.
+//     The CLI confirms that branch with the user first; core never
+//     guesses one here, which is why an unset BaseBranch falls back to
+//     main-clone's current branch rather than to a hardcoded "main".
+//   - A local directory with no upstream, or a greenfield root: nothing
+//     to fetch from, so this is a no-op. Deliberately re-evaluated on
+//     every create rather than recorded once, so a prototype that later
+//     gains an origin starts being refreshed with no migration.
+//
+// A refresh failure is reported rather than swallowed: silently
+// provisioning from a stale tree is the bug this exists to fix, and a
+// user who wants to proceed anyway can pass --no-refresh.
+func refreshBase(ctx context.Context, root repo.Root, params CreateParams, progress ProgressFunc) error {
+	if params.SkipRefresh {
+		return nil
+	}
+	src := repo.ClassifySource(ctx, params.RepoURL)
+	if src.Kind == repo.SourceLocalOnly {
+		return nil
+	}
+
+	branch := params.BaseBranch
+	if branch == "" {
+		// No branch resolved by the caller: main-clone's own checked-out
+		// branch is the one a worktree would have been cut from anyway,
+		// so refreshing it is exactly "the same base, but current".
+		var err error
+		if branch, err = repo.DefaultBranch(ctx, root); err != nil {
+			return err
+		}
+	}
+
+	reportProgress(progress, store.StepPending, fmt.Sprintf("refreshing %s from %s", branch, src.FetchURL))
+	return repo.RefreshMainClone(ctx, root, src, branch)
 }
 
 // uniqueID generates an idgen ID and retries on a collision against the

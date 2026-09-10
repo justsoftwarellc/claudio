@@ -131,6 +131,16 @@ With no ID it lists your instances and asks which one — putting any whose repo
 
 `claudio create <repo>` accepts `git@host:path`, `ssh://[user@]host/path`, or `https://host/path` — **not** a bare `owner/repo` shorthand. The repo is cloned once per remote URL and reused; each `create` against the same URL adds a new worktree rather than re-cloning.
 
+Reused, but not stale: every `create` fetches the base branch before making the worktree, so a new instance starts from current upstream rather than from whatever was there when the repo was first cloned.
+
+```bash
+claudio create git@github.com:acme/web.git     # fetches main, then branches
+claudio create git@github.com:acme/web.git --base-branch develop
+claudio create git@github.com:acme/web.git --no-refresh   # use the clone as-is
+```
+
+If the upstream can't be reached, claudio says so and creates from the existing clone instead of failing.
+
 ### From a local directory
 
 `claudio create .` clones from a directory on disk instead of a remote, for local-only or not-yet-pushed work:
@@ -141,6 +151,17 @@ claudio create .
 ```
 
 Anything path-shaped works — `.`, `..`, `./sub`, `~/Projects/my-app`, or an absolute path. If the directory isn't a git repo yet, claudio runs `git init` and commits what's there first, so unversioned work still gets an instance.
+
+**If the directory has an `origin`, claudio asks which branch to start from** and fetches it from that upstream — you're standing in a working copy that could be on any branch, so it doesn't guess:
+
+```
+~/Projects/my-app has an upstream: git@github.com:acme/my-app.git
+Which branch should this instance start from? [feat/auth]
+```
+
+The default offered is the branch you currently have checked out. `--base-branch <b>` answers it up front, `--yes` accepts the default, and `--no-refresh` skips the fetch entirely.
+
+A directory with **no** `origin` — a prototype that has never been pushed — skips all of this; there's nothing to fetch from. Push it to GitHub later and the next `create` picks the new remote up automatically, with nothing to re-run.
 
 `create .` also writes a `.claudio` file recording the instance it made, so commands run from that directory (or any subdirectory) don't need the ID:
 

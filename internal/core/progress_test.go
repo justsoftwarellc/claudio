@@ -21,7 +21,11 @@ func TestCreateInstanceReportsProgressAtEachStage(t *testing.T) {
 	}
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", result.ContainerID).Run() })
 
+	// Two StepPending reports: the generated instance id, then the
+	// main-clone refresh (a fetch can be slow, and progress exists so a
+	// long create does not sit silent — see refreshBase).
 	wantSteps := []store.ProvisionStep{
+		store.StepPending,
 		store.StepPending,
 		store.StepRepoReady,
 		store.StepPortsReady,
@@ -121,6 +125,7 @@ func TestFailedCreateStopsReportingAtTheFailurePoint(t *testing.T) {
 	// StepContainerUp or StepHealthy, since the image can't be pulled.
 	wantSteps := []store.ProvisionStep{
 		store.StepPending,
+		store.StepPending, // id generated, then the refresh (refreshBase)
 		store.StepRepoReady,
 		store.StepPortsReady,
 		store.StepConfigReady,

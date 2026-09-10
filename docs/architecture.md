@@ -187,6 +187,24 @@ The **PROVISIONING** state is a sub-state machine, and each step is idempotent s
 
 Cloning happens once per repo rather than once per instance, so the second and subsequent sessions on a repo are a `git worktree add` — seconds, not minutes — and they share the object store instead of duplicating it.
 
+**Cloned once, but refreshed on every create.** Reusing the clone is what makes the second session fast; it is also what made every session after the first *stale*. `main-clone` was cloned on the first create and never fetched again, so each new worktree branched from whatever the source held at first-clone time and drifted further behind for the life of the repo — silently, since nothing about the resulting worktree looks wrong. Verified in both directions: an inheritance test failed as written and passed after a manual `git fetch` + `git reset --hard`.
+
+`claudio create` now refreshes `main-clone` before cutting the worktree. What that means depends on where the commits actually come from:
+
+| Source | On create | Why |
+|---|---|---|
+| A remote URL (`git@github.com:acme/web.git`, HTTPS, or a bare-repo `file://` mirror) | Fetch the base branch and reset to it. No prompt. | The remote is authoritative and the user named it. There is no branch question to ask. |
+| A local working copy that has an `origin` (`claudio create .` in a clone) | Ask which branch, then fetch **that directory's upstream**. | The user is standing in a checkout that could be on any branch; guessing bases the instance on something they did not choose. |
+| A local directory with no `origin`, or `--new` | Skip. Nothing to fetch from. | A prototype has no upstream. |
+
+Three details worth stating, each of which was a wrong first attempt:
+
+- **The upstream is read from the source directory, not from `main-clone`.** Cloning does not copy remotes — verified: `main-clone`'s own `origin` points at the source directory, never at that directory's GitHub. `main-clone` has no record of the real upstream at all.
+- **Classification is redone on every create**, never recorded at create time. That is what lets a prototype which *later* gains an origin (the user pushed it to GitHub) start being refreshed on its next create, with no migration and nothing to re-run.
+- **The refresh is `fetch` + `reset --hard`, not `update-ref`.** Moving the ref alone leaves `main-clone`'s working tree and index stale — verified: that produces a phantom staged deletion for every file the new commits added. This cannot destroy user work: `main-clone` is Claudio-managed, is never handed to a user or a container, and permanently holds the one branch git forbids any worktree from checking out.
+
+`--no-refresh` skips it (offline, or a deliberately pinned clone), and `--base-branch <b>` names the branch non-interactively. An unreachable upstream degrades to a warning and the existing clone rather than failing the create.
+
 It also makes "one instance = one line of work" **structural rather than conventional**: git refuses to check out the same branch in two worktrees, so parallel agents cannot collide on a branch even by mistake. That refusal surfaces as a clear error naming the instance already holding it.
 
 The worktree is a plain host directory — openable in any editor, usable with host `git`. That is the answer to "the host needs access to the folder where the repo is cloned". The root is **configurable**, defaulting to `~/.claudio`.

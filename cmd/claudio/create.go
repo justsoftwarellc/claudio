@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -20,19 +23,21 @@ import (
 
 // cmdCreate implements `claudio create <repo|path> [--branch B | --new-branch
 // B] [--name N] [--ports c,...] [--publish-all-interfaces] [--memory M]
-// [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes]`, plus
+// [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes]
+// [--base-branch B] [--no-refresh]`, plus
 // the greenfield `claudio create --new <name>` path (no upstream repo —
 // docs/architecture.md §5.1). See §5.1/§9 and ROD-100. The credential
 // comes from credentialEnv (see env.go).
 func cmdCreate(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo|path> [--branch B | --new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes]")
+		fmt.Fprintln(os.Stderr, "Usage: claudio create <repo|path> [--branch B | --new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail] [--yes] [--base-branch B] [--no-refresh]")
 		fmt.Fprintln(os.Stderr, "   or: claudio create --new <name> [--new-branch B] [--name N] [--ports container,...] [--publish-all-interfaces] [--memory M] [--cpus N] [--pids N] [--env-file F] [--clean-on-fail]")
 		return 1
 	}
 
 	var repoURL, greenfieldName, branch, newBranch, name, portsFlag, envFile, memory string
-	var cleanOnFail, assumeYes, publishAllInterfaces bool
+	var cleanOnFail, assumeYes, publishAllInterfaces, noRefresh bool
+	var baseBranch string
 	var cpus, pids int
 	var cpusSet, pidsSet bool
 
@@ -123,6 +128,15 @@ func cmdCreate(ctx context.Context, args []string) int {
 			cleanOnFail = true
 		case "--yes":
 			assumeYes = true
+		case "--no-refresh":
+			noRefresh = true
+		case "--base-branch":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "claudio create: --base-branch requires a value")
+				return 1
+			}
+			baseBranch = args[i]
 		default:
 			fmt.Fprintf(os.Stderr, "claudio create: unknown flag %q\n", args[i])
 			return 1
@@ -184,6 +198,18 @@ func cmdCreate(ctx context.Context, args []string) int {
 		repoURL = resolved
 	}
 
+	// Decide what main-clone gets refreshed to before the worktree is
+	// cut. A remote source refreshes from its default branch silently; a
+	// local clone asks, because the user is standing in a working copy
+	// that could be on any branch (see resolveBaseBranch).
+	if !noRefresh && greenfieldName == "" && baseBranch == "" {
+		resolved, ok := resolveBaseBranch(ctx, repoURL, assumeYes)
+		if !ok {
+			return 1
+		}
+		baseBranch = resolved
+	}
+
 	env, ok := credentialEnv("claudio create")
 	if !ok {
 		return 1
@@ -212,6 +238,8 @@ func cmdCreate(ctx context.Context, args []string) int {
 		EnvFile:          envFile,
 		CleanOnFail:      cleanOnFail,
 		ResourceOverride: resourceOverride,
+		BaseBranch:       baseBranch,
+		SkipRefresh:      noRefresh,
 
 		PublishAllInterfaces: publishAllInterfaces,
 	}
@@ -339,4 +367,106 @@ func parseManualPorts(flag string) ([]portdetect.Manual, error) {
 		out = append(out, portdetect.Manual{Container: containerPort})
 	}
 	return out, nil
+}
+
+// resolveBaseBranch decides which upstream branch main-clone is
+// refreshed to before an instance's worktree is cut from it.
+//
+// The three source shapes get different treatment, because the question
+// "which branch did you mean?" only has an obvious answer for two of
+// them:
+//
+//   - A remote URL: no prompt. The user named a repo, so its default
+//     branch is what they meant; returning "" lets core use main-clone's
+//     own checked-out branch, which is that default.
+//   - A local directory with an upstream: prompt. The user is standing
+//     in a working copy that may be on any branch, and basing the
+//     instance on the wrong one is a silent, expensive mistake — they
+//     would not find out until the agent had already worked against it.
+//   - A local directory with no upstream: no prompt and no refresh;
+//     there is nothing to fetch from.
+//
+// Non-interactive-safe, the same requirement as the branch-collision
+// prompt (docs/architecture.md §5.1): with --yes, or on a non-terminal
+// stdin, this takes the upstream's default rather than blocking a
+// script forever on a question nobody can answer.
+func resolveBaseBranch(ctx context.Context, repoURL string, assumeYes bool) (string, bool) {
+	src := repo.ClassifySource(ctx, repoURL)
+	if src.Kind != repo.SourceLocalWithUpstream {
+		// Remote: core falls back to main-clone's default branch.
+		// Local-only: core skips the refresh entirely.
+		return "", true
+	}
+
+	branches, err := repo.RemoteBranches(ctx, src.FetchURL)
+	if err != nil || len(branches) == 0 {
+		// The upstream is unreachable (offline, no access, a stale
+		// remote). That is not worth failing a create over — the clone
+		// on disk is still perfectly usable — so fall back to the
+		// existing no-refresh behavior and say so, rather than leaving
+		// the user to wonder whether they got fresh code.
+		fmt.Fprintf(os.Stderr, "! could not reach %s to list branches — creating from the existing clone without refreshing.\n", src.FetchURL)
+		return "", true
+	}
+
+	current := currentBranch(ctx, src.SourceDir)
+	def := defaultAmong(branches, current)
+
+	if assumeYes || !isInteractive() {
+		fmt.Fprintf(os.Stderr, "Basing on %s from %s.\n", def, src.FetchURL)
+		return def, true
+	}
+
+	fmt.Fprintf(os.Stderr, "%s has an upstream: %s\n", src.SourceDir, src.FetchURL)
+	fmt.Fprintf(os.Stderr, "Which branch should this instance start from? [%s] ", def)
+
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && line == "" {
+		fmt.Fprintln(os.Stderr, "\nclaudio create: canceled.")
+		return "", false
+	}
+	answer := strings.TrimSpace(line)
+	if answer == "" {
+		answer = def
+	}
+	if !slices.Contains(branches, answer) {
+		fmt.Fprintf(os.Stderr, "claudio create: %q is not a branch on %s\n", answer, src.FetchURL)
+		return "", false
+	}
+	return answer, true
+}
+
+// defaultAmong picks the branch to offer: the one the source directory
+// currently has checked out when the upstream also has it (the user is
+// most likely to mean the branch they are looking at), else a
+// conventional default, else whatever the upstream lists first.
+func defaultAmong(branches []string, current string) string {
+	if current != "" && slices.Contains(branches, current) {
+		return current
+	}
+	for _, name := range []string{"main", "master"} {
+		if slices.Contains(branches, name) {
+			return name
+		}
+	}
+	return branches[0]
+}
+
+// currentBranch reports the branch dir has checked out, or "" if that
+// cannot be determined (detached HEAD, or not a repo).
+func currentBranch(ctx context.Context, dir string) string {
+	if dir == "" {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	if b := strings.TrimSpace(string(out)); b != "HEAD" {
+		return b
+	}
+	return ""
 }
