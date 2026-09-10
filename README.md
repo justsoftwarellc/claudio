@@ -371,6 +371,8 @@ Two things worth knowing:
 - **This is source-available, not open source.** The noncommercial restriction is incompatible with the OSI definition, so GitHub won't show a license badge and some tooling will report the license as non-standard. That's expected, not a packaging mistake — the SPDX identifier is `PolyForm-Noncommercial-1.0.0`.
 - **The software comes with no warranty and no liability**, as far as the law allows. See the *No Liability* section of the [LICENSE](LICENSE).
 
+Contributions are welcome, and need a [Contributor License Agreement](CLA.md) — you keep the copyright in your work, and grant the right to sublicense it so it can be included when claudio is licensed commercially. It's a checkbox in the pull request template, once. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ---
 
 See [`docs/architecture.md`](docs/architecture.md) for how claudio is built, if you're contributing rather than just using it.
