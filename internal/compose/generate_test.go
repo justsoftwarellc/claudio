@@ -41,7 +41,7 @@ func TestGenerateOverrideProducesValidYAML(t *testing.T) {
 	if !ok {
 		t.Fatal("services.db missing from generated override")
 	}
-	if len(db.Ports) != 1 || db.Ports[0] != "43000:5432" {
+	if db.Ports == nil || len(*db.Ports) != 1 || (*db.Ports)[0] != "43000:5432" {
 		t.Errorf("db.Ports = %v, want [\"43000:5432\"]", db.Ports)
 	}
 	if len(db.Networks) != 1 || db.Networks[0] != "claudio_test1" {
@@ -52,8 +52,12 @@ func TestGenerateOverrideProducesValidYAML(t *testing.T) {
 	if !ok {
 		t.Fatal("services.cache missing from generated override")
 	}
-	if len(cache.Ports) != 0 {
-		t.Errorf("cache.Ports = %v, want none — no rewrite was given for cache", cache.Ports)
+	// A sidecar with no rewrite emits no ports: key at all, so this
+	// round-trips back as nil rather than an empty list — a stricter
+	// check than "length zero", which an emitted `ports: []` would also
+	// have satisfied while still replacing the base file's own ports.
+	if cache.Ports != nil {
+		t.Errorf("cache.Ports = %v, want no ports key — no rewrite was given for cache", *cache.Ports)
 	}
 
 	agent, ok := doc.Services[AgentServiceName]

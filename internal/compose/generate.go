@@ -25,6 +25,41 @@ func ProjectName(instanceID string) string {
 // use to reach it, and what `docker compose exec`/`logs` addresses it as.
 const AgentServiceName = "agent"
 
+// ErrAgentServiceNameCollision reports that the repo's own compose file
+// declares a service named AgentServiceName. A sentinel so callers can
+// match on it rather than on the message text.
+var ErrAgentServiceNameCollision = fmt.Errorf("compose: service name collides with Claudio's agent service")
+
+// ValidateServiceNames rejects a repo compose file that declares a
+// service named AgentServiceName (ROD-131).
+//
+// GenerateOverride writes its own agent service into the same map it
+// fills with the repo's sidecars, so a repo service of that name is
+// silently replaced. Provisioning then succeeded with three separate
+// wrong outcomes: the repo's service never ran, the host port allocated
+// for it was reserved and reported against a container that did not
+// exist, and — worst — Compose still merged the *base* file's ports onto
+// the surviving service of that name, publishing the agent container on
+// 0.0.0.0 with no --publish-all-interfaces given, contradicting §6.2 and
+// §7.4's posture outright.
+//
+// Refusing is the phase-1 answer rather than renaming either side.
+// Renaming Claudio's service is the better eventual fix but reaches
+// status reporting, compose.Ps filtering and logs, all of which address
+// the agent by this exact name; renaming the repo's service would change
+// the name its own depends_on and service DNS expect. An error the user
+// can act on beats either, and beats a silently broken instance that
+// reports itself healthy.
+func ValidateServiceNames(names []string) error {
+	for _, name := range names {
+		if name == AgentServiceName {
+			return fmt.Errorf("%w: rename the %q service in your compose file — Claudio adds its own service by that name to every instance project, which would replace yours",
+				ErrAgentServiceNameCollision, AgentServiceName)
+		}
+	}
+	return nil
+}
+
 // PortRewrite is one DeclaredPort paired with the host port
 // store.AllocatePort assigned it — the allocator's output, and this
 // package's input for building the override's ports: rewrite.
@@ -95,19 +130,19 @@ type composeService struct {
 	// the same compose file would both want host 5432"). Compose's
 	// `!override` YAML tag on a sequence node replaces the base's list
 	// outright instead of appending to it — this is that tag.
-	Ports       overrideStringList `yaml:"ports,omitempty"`
-	ExtraHosts  []string           `yaml:"extra_hosts,omitempty"`
-	Environment map[string]string  `yaml:"environment,omitempty"`
-	Volumes     []string           `yaml:"volumes,omitempty"`
-	WorkingDir  string             `yaml:"working_dir,omitempty"`
-	Command     []string           `yaml:"command,omitempty"`
-	Labels      map[string]string  `yaml:"labels,omitempty"`
-	CapDrop     []string           `yaml:"cap_drop,omitempty"`
-	SecurityOpt []string           `yaml:"security_opt,omitempty"`
-	MemLimit    string             `yaml:"mem_limit,omitempty"`
-	CPUs        string             `yaml:"cpus,omitempty"`
-	PidsLimit   int64              `yaml:"pids_limit,omitempty"`
-	Restart     string             `yaml:"restart,omitempty"`
+	Ports       *overrideStringList `yaml:"ports,omitempty"`
+	ExtraHosts  []string            `yaml:"extra_hosts,omitempty"`
+	Environment map[string]string   `yaml:"environment,omitempty"`
+	Volumes     []string            `yaml:"volumes,omitempty"`
+	WorkingDir  string              `yaml:"working_dir,omitempty"`
+	Command     []string            `yaml:"command,omitempty"`
+	Labels      map[string]string   `yaml:"labels,omitempty"`
+	CapDrop     []string            `yaml:"cap_drop,omitempty"`
+	SecurityOpt []string            `yaml:"security_opt,omitempty"`
+	MemLimit    string              `yaml:"mem_limit,omitempty"`
+	CPUs        string              `yaml:"cpus,omitempty"`
+	PidsLimit   int64               `yaml:"pids_limit,omitempty"`
+	Restart     string              `yaml:"restart,omitempty"`
 }
 
 // overrideStringList marshals as a YAML sequence tagged !override, so
@@ -117,6 +152,15 @@ type composeService struct {
 // yaml.v3's omitempty still elides since len(o) == 0 satisfies IsZero
 // for a slice-kind field regardless of the custom marshaler.
 type overrideStringList []string
+
+// emptyOverrideList is an explicitly empty !override sequence. A plain
+// empty overrideStringList would not survive the field's omitempty (a
+// zero-length slice satisfies IsZero regardless of the custom
+// marshaler — verified, it emits no ports: key at all), so the field is
+// a pointer and this is what gets pointed at. Pointing at it renders
+// `ports: !override []`, which is what actually stops a base file's
+// ports: from merging in.
+var emptyOverrideList = overrideStringList{}
 
 func (o overrideStringList) MarshalYAML() (interface{}, error) {
 	node := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!override"}
@@ -154,10 +198,12 @@ func GenerateOverride(networkName string, sidecarServiceNames []string, rewrites
 
 	services := make(map[string]composeService, len(sidecarServiceNames)+1)
 	for _, name := range sidecarServiceNames {
-		services[name] = composeService{
-			Networks: []string{networkName},
-			Ports:    portsByService[name],
+		svc := composeService{Networks: []string{networkName}}
+		if p, ok := portsByService[name]; ok {
+			list := overrideStringList(p)
+			svc.Ports = &list
 		}
+		services[name] = svc
 	}
 
 	if err := engine.ValidateHostServices(agent.HostServices); err != nil {
@@ -172,10 +218,18 @@ func GenerateOverride(networkName string, sidecarServiceNames []string, rewrites
 		Image:         agent.Image,
 		ContainerName: "claudio-" + agent.InstanceID,
 		Networks:      []string{networkName},
-		ExtraHosts:    engine.ExtraHosts(agent.HostServices),
-		Environment:   agent.Env,
-		Command:       agent.Cmd,
-		WorkingDir:    containerWorkdir,
+		// Explicitly empty, and explicitly tagged !override: Compose
+		// merges a base file's list-valued keys into the override rather
+		// than replacing them, so a base service of this name would
+		// otherwise donate its ports: to the agent container — which is
+		// exactly how ROD-131 published the agent on 0.0.0.0. Callers
+		// reject that collision before reaching here; this makes the leak
+		// impossible rather than merely unreached.
+		Ports:       &emptyOverrideList,
+		ExtraHosts:  engine.ExtraHosts(agent.HostServices),
+		Environment: agent.Env,
+		Command:     agent.Cmd,
+		WorkingDir:  containerWorkdir,
 		Volumes: []string{
 			agent.RepoRoot + ":/repo",
 			agent.HomeDir + ":/home/agent",

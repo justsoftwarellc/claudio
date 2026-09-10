@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rodrigomorales/claudio/internal/compose"
 	"github.com/rodrigomorales/claudio/internal/config"
 	"github.com/rodrigomorales/claudio/internal/coreerr"
 	"github.com/rodrigomorales/claudio/internal/engine"
@@ -365,6 +366,26 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 	}
 
 	if useCompose {
+		// Before any allocation: a repo service named like Claudio's own
+		// agent service would be replaced by it, and the host port
+		// reserved here would then be held against a container that never
+		// exists (ROD-131). Checking first is what keeps the failure a
+		// plain error instead of a leaked reservation.
+		if composeFilePath != "" {
+			names, err := compose.LoadServiceNames(composeFilePath)
+			if err != nil {
+				return "", nil, failAndReturn(ctx, st, id, coreerr.Wrap(coreerr.InvalidInput, "compose: load service names", err))
+			}
+			if err := compose.ValidateServiceNames(names); err != nil {
+				return "", nil, failAndReturn(ctx, st, id, coreerr.Wrap(coreerr.InvalidInput, "compose: service names", err))
+			}
+		}
+		for _, svc := range repoCfg.Services {
+			if err := compose.ValidateServiceNames([]string{svc.Name}); err != nil {
+				return "", nil, failAndReturn(ctx, st, id, coreerr.Wrap(coreerr.InvalidInput, "compose: .claudio.yml services", err))
+			}
+		}
+
 		ports, err = allocateComposePorts(ctx, st, composeFilePath, id, params)
 		if err != nil {
 			return "", nil, failAndReturn(ctx, st, id, err)
