@@ -25,6 +25,51 @@ if [ ! -f "$HOME/.claude.json" ] && [ -f /opt/claudio/claude.json.template ]; th
 	sed "s#__CLAUDIO_WORKDIR__#$PWD#" /opt/claudio/claude.json.template > "$HOME/.claude.json"
 fi
 
+# Tell the agent how to make a dev server reachable from the host.
+#
+# Published ports forward to the container's external interface, so an app
+# listening on loopback *inside* the container is unreachable from the
+# host even when its port is published — verified: a server on 127.0.0.1
+# answers in-container and not from the host. Most dev servers default to
+# loopback, so without this the port mapping looks correct and the browser
+# still gets nothing.
+#
+# This goes in user memory (~/.claude/CLAUDE.md) rather than the repo's
+# own CLAUDE.md, which belongs to the user and is often checked in.
+# Written only when absent, so anything the user adds here survives a
+# container rebuild (home/ is bind-mounted and persists — ROD-99).
+#
+# An env var would not be enough: HOST=0.0.0.0 is honoured by some
+# frameworks but ignored by Vite, which only takes --host (verified
+# against vite 5 in a real container). Guidance covers the general case
+# where a single variable cannot.
+if [ ! -f "$HOME/.claude/CLAUDE.md" ]; then
+	mkdir -p "$HOME/.claude"
+	cat > "$HOME/.claude/CLAUDE.md" <<'MEMO'
+# Running apps in this container
+
+This is a Claudio sandbox. Ports are published to the host, but only from
+the container's external interface.
+
+**Always bind dev servers and any other app to `0.0.0.0`, never
+`localhost` or `127.0.0.1`.** An app on loopback cannot be reached from
+the host even when its port is published.
+
+    vite --host 0.0.0.0        # not just `vite`
+    next dev -H 0.0.0.0
+    python -m http.server --bind 0.0.0.0
+    # Node: server.listen(port, '0.0.0.0')
+
+Note that `HOST=0.0.0.0` works for some tools but is ignored by others
+(Vite among them) — prefer the explicit flag.
+
+Only ports mapped for this instance are reachable. To expose one that is
+not yet mapped, the user runs `claudio ports <id> --add <port>` on the
+host, then `claudio restart <id>` — which replaces the container, so the
+app has to be started again afterwards.
+MEMO
+fi
+
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
 	echo "entrypoint: no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY set." >&2
 	echo "entrypoint: the container has no credential to run Claude Code. See ROD-96." >&2
