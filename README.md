@@ -293,8 +293,9 @@ claudio create . --host-service db:5432
 
 Inside the container, `db:5432` is now that service. Repeat the flag for more than one. To make it permanent for everyone working on the repo, put it in `.claudio.yml` under `host_services:` instead.
 
-Two things worth knowing:
+Three things worth knowing:
 
+- **The service must be reachable on your host.** Claudio adds a hostname pointing at the host gateway, so a service in another container only works if that container *publishes* the port (`docker run -p 27017:27017 mongo:7`, not a bare `docker run mongo:7`). Check `docker ps` for a `->` in the `PORTS` column.
 - **The port is the same on both sides.** `--host-service db:5432` means "the thing on host port 5432, called `db` inside". There's no remapping — claudio adds a hostname, not a port forward — so `db:5432:6000` is refused rather than quietly not working.
 - **Only what you declare resolves.** An undeclared name doesn't work from inside the container. This is deliberate: pointing an instance at your own database is fine, an agent finding host services by guessing names is not. It's also why this is worth thinking about once before you turn it on — you are opening a door out of the sandbox, one name at a time.
 
@@ -305,6 +306,8 @@ SERVICE  DIRECTION  CONTAINER  ADDRESS                 SOURCE
 web      published  3000       http://127.0.0.1:43001  detected (next.config.js)
 db       host       5432       db:5432                 declared (.claudio.yml)
 ```
+
+Full walkthrough, including how to check whether a container's port is actually published: [Reaching a Service Already on Your Machine](docs/site/docs/docs/guide/host-services.md).
 
 ## `.claudio.yml` and `config.yml`
 

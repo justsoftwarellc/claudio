@@ -28,6 +28,10 @@ ports:
     container: 3000
     expose: false           # container-internal only; omit or true to publish to the host
 
+host_services:              # services already on YOUR machine — see Host Services
+  - name: mongo             #   inside the container: mongo:27017
+    host: 27017             #   the port it already listens on (must be published)
+
 services:                   # sidecars synthesized into a compose project — see Compose Sidecars
   - name: db
     image: postgres:16
