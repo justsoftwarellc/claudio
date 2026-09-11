@@ -50,30 +50,28 @@ resources:
 
 ```yaml
 workspace_root: ~/.claudio     # where repos/worktrees/state live
-editor: code                    # what `claudio open` launches; bare binary or absolute path
+editor: code                    # what `claudio open` launches; see below
 resources:
   memory: 6g
   cpus: 4
   pids: 512
 ports:
   range: [43000, 43999]
-  bind: 127.0.0.1               # never 0.0.0.0 by default
+  bind: 127.0.0.1               # never 0.0.0.0 by default — see --publish-all-interfaces
 runtime:
   docker_host: ""                # pin a specific Docker endpoint; empty auto-detects
 ```
 
 ### `editor`
 
-What `claudio open <id>` launches against an instance's worktree. It's machine-level rather than per-repo on purpose: which editor you use is a property of you and your machine, not something that should arrive with a clone.
+The editor `claudio open <id>` launches against an instance's worktree. Set it with the CLI rather than by hand — it checks the binary resolves on `PATH` before writing, so a typo fails now instead of at your next `claudio open`:
 
 ```bash
 claudio config set editor code   # or cursor, subl, zed, nvim, …
 claudio config get editor
 ```
 
-Prefer those over hand-editing the file — `set` checks the binary actually resolves on `PATH` before writing, so a typo fails immediately instead of at your next `claudio open`.
-
-The value is a bare binary name or an absolute path; arguments (`code -n`) aren't supported. There's no default: every other command works without it, and `claudio open` tells you how to set one the first time you run it. `install.sh` offers to configure it during onboarding.
+A bare binary name or absolute path; arguments (`code -n`) aren't supported. There's no default — `install.sh` offers to set one, and `claudio open` tells you how if it's unset. Every other command works without it.
 
 ### Lifecycle hooks: `post_create` vs `post_start`
 
@@ -128,18 +126,3 @@ claudio image build --repo /path/to/your/clone
 ```
 
 `create` never builds an image as a side effect (a multi-minute, network-dependent build has no business happening inside what's supposed to be a fast provisioning step) — if the image it needs doesn't exist yet, it tells you the exact `claudio image build --repo ...` command to run.
-
-`~/.claudio/config.yml`:
-
-```yaml
-workspace_root: ~/.claudio     # where repos/worktrees/state live
-resources:
-  memory: 6g
-  cpus: 4
-  pids: 512
-ports:
-  range: [43000, 43999]
-  bind: 127.0.0.1               # never 0.0.0.0 by default — see --publish-all-interfaces
-runtime:
-  docker_host: ""                # pin a specific Docker endpoint; empty auto-detects
-```
