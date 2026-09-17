@@ -233,3 +233,29 @@ func SourceDirFor(repoURL string) string {
 	}
 	return filepath.Clean(strings.TrimPrefix(repoURL, "file://"))
 }
+
+// UserSourceDir returns the directory the user actually works in behind a
+// file:// repo URL, or "" when there is no such directory (ROD-133).
+//
+// Stricter than SourceDirFor, and deliberately so: that function answers
+// "what path does this URL point at", which is the right question for
+// refresh reporting but the wrong one for locating config. A bare
+// repository is a valid file:// source and has a path, but nobody stands
+// in it and it has no working tree to hold a .claudio.yml — treating it
+// as the user's folder sends every config read to
+// `<mirror>.git/.claudio.yml`, a file that cannot exist. Verified: that
+// is exactly what broke `claudio create file://<path>/origin.git` against
+// a repo whose image: section lives in committed history.
+//
+// Only a real working copy — `claudio create .` in a checkout — is a
+// source directory in the sense config resolution means.
+func UserSourceDir(ctx context.Context, repoURL string) string {
+	dir := SourceDirFor(repoURL)
+	if dir == "" {
+		return ""
+	}
+	if !isWorkingCopy(ctx, dir) {
+		return ""
+	}
+	return dir
+}

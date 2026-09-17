@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/rodrigomorales/claudio/internal/config"
 )
 
 func TestCreateInstanceRunsPostCreate(t *testing.T) {
@@ -36,7 +38,7 @@ func TestCreateInstanceRunsPostCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInstance: %v", err)
 	}
-	if err := runPostCreate(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir); err != nil {
+	if err := runPostCreate(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, filepath.Join(result.WorktreeDir, config.FileName)); err != nil {
 		t.Fatalf("runPostCreate: %v", err)
 	}
 
@@ -100,7 +102,7 @@ func TestStartInstanceDoesNotRerunPostCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInstance: %v", err)
 	}
-	if err := runPostCreate(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir); err != nil {
+	if err := runPostCreate(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, filepath.Join(result.WorktreeDir, config.FileName)); err != nil {
 		t.Fatalf("runPostCreate (baseline): %v", err)
 	}
 
@@ -156,7 +158,7 @@ func TestCreateInstancePostCreateFailureFailsCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInstance: %v", err)
 	}
-	err = runPostCreate(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir)
+	err = runPostCreate(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, filepath.Join(result.WorktreeDir, config.FileName))
 	if err == nil {
 		t.Fatal("expected an error from a post_create command that exits nonzero")
 	}

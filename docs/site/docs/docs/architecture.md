@@ -804,7 +804,9 @@ global config  <  repo .claudio.yml  <  local per-instance override
    machine allows   project needs        needs right now
 ```
 
-The split is not arbitrary — it follows what each fact is *about*. Ports and services are properties of the **project**, so they belong in the repo and should be versioned and shared. Resource ceilings are properties of the **machine**, so their baseline is global: not every machine is the same, and not every repo has the same needs.
+The split follows what each fact is *about*. Ports, services and hooks are properties of **this repo on this machine**. Resource ceilings are properties of the **machine** as a whole, so their baseline is global: not every machine is the same, and not every repo has the same needs.
+
+**Both files are local and uncommitted.** `.claudio.yml` was originally specified as "versioned, shared, committed" — a project-level file a team would check in. That was reversed: committing it was not merely optional, it was load-bearing in a way nobody could see, since `create` clones committed history only. An uncommitted `.claudio.yml` never reached the instance and was silently ignored, while `ports --add` wrote into the worktree clone, a path the user has no view of. A shared, committed config may return later, but as a **separate file** rather than an overload of this one.
 
 The global baseline applies to every new instance, whether created by cloning a repo or by `claudio create --new` on a fresh `git init` root. A repo that declares nothing simply inherits it.
 
@@ -816,9 +818,13 @@ Claudio defines its own schema rather than adopting `devcontainer.json`'s. The d
 
 Conventions: **`snake_case` throughout**, no camelCase anywhere. Every list-shaped key is a list, never "string or list". Unknown keys are an error, not silently ignored — a typo in `post_create` should say so rather than quietly doing nothing.
 
-##### `<repo>/.claudio.yml` — what the project needs
+##### `.claudio.yml` — what this repo needs, on this machine
 
-Versioned, shared, committed. Every key optional; a repo that declares nothing gets sensible defaults.
+**Local, gitignored, never committed.** Every key optional; a repo that declares nothing gets sensible defaults.
+
+It lives in the folder you work in — the directory you ran `claudio create .` from — and **the store records where that is** (`repos.source_dir`). The location is data, not convention: no upward search, no fallback chain, no ambiguity about which copy a command means. `claudio create` prints the path it resolved.
+
+An instance created from a remote URL has no folder you stand in, so for those the file is read from the worktree instead. That is the one fallback, and it exists because there is genuinely nowhere else to look.
 
 ```yaml
 image:

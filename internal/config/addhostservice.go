@@ -10,7 +10,10 @@ import (
 )
 
 // AddHostServiceToRepoConfig records a `claudio create --host-service`
-// declaration in the instance worktree's .claudio.yml (ROD-128).
+// declaration in the instance's .claudio.yml (ROD-128). Takes the
+// resolved config path rather than a directory, for the reason
+// AddPortToRepoConfig's doc gives: where config lives is the store's
+// answer to give, not this function's to assume (ROD-133).
 //
 // This exists for the same reason AddPortToRepoConfig does, and guards
 // against the same bug (ROD-123): .claudio.yml — not the store — is what
@@ -30,9 +33,7 @@ import (
 //
 // The file is edited as a yaml.Node tree for the same reason
 // AddPortToRepoConfig does it that way — see that function's doc.
-func AddHostServiceToRepoConfig(dir string, hs HostService) error {
-	path := dir + "/.claudio.yml"
-
+func AddHostServiceToRepoConfig(path string, hs HostService) error {
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("config: read %s: %w", path, err)

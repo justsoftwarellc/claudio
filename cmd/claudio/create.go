@@ -288,6 +288,11 @@ func cmdCreate(ctx context.Context, args []string) int {
 
 	fmt.Printf("Created %s (branch %s)\n", result.InstanceID, result.Branch)
 	fmt.Printf("Workspace: %s\n", result.WorktreeDir)
+	if result.ConfigPath != "" {
+		// Named explicitly because the whole ROD-133 bug was config being
+		// read and written at a path the user had no view of.
+		fmt.Printf("Config: %s\n", result.ConfigPath)
+	}
 	if len(result.Ports) > 0 {
 		parts := make([]string, 0, len(result.Ports))
 		for _, p := range result.Ports {
@@ -298,6 +303,17 @@ func cmdCreate(ctx context.Context, args []string) int {
 	fmt.Printf("Attach with: claudio attach %s\n", result.InstanceID)
 	if tiedNotice != "" {
 		fmt.Println(tiedNotice)
+	}
+	if result.ConfigIsTracked {
+		// Claudio treats .claudio.yml as local config, but it will not
+		// touch the user's git index to make that true — a source repo
+		// that already exists is never written to (docs/architecture.md
+		// §5.1). Saying so once is the honest middle: info/exclude cannot
+		// suppress a path git already tracks, so their edits will keep
+		// showing as changes until they decide otherwise.
+		fmt.Fprintf(os.Stderr, "\nnote: %s is tracked by git. Claudio treats it as local config,\n", config.FileName)
+		fmt.Fprintln(os.Stderr, "      so your edits to it will keep showing up as changes.")
+		fmt.Fprintf(os.Stderr, "      To make it local: git rm --cached %s\n", config.FileName)
 	}
 	return 0
 }

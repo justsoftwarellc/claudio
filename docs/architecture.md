@@ -271,12 +271,24 @@ Verified end to end: a commit made inside the container appears immediately on t
 **Dependency installation is declared, never assumed.** Provisioning runs no implicit `npm install`; a repo that needs one says so:
 
 ```yaml
-# .claudio.yml
+# .claudio.yml, in the folder you ran `claudio create .` from
 post_create:
   - npm ci
 ```
 
 This keeps `create` fast and predictable, and keeps the tool from guessing what a project's setup step should be (§12.4).
+
+#### Three files, three jobs
+
+Similar names, unrelated purposes. Worth stating plainly, because two of them sitting in the same directory was a genuine source of confusion (ROD-133):
+
+| File | Where | What it is |
+|---|---|---|
+| `.claudio.yml` | the folder you ran `claudio create .` from | **Config.** Ports, services, hooks, image, resources. Local and gitignored; the store records its location (§12.4). |
+| `.claudio` (no extension) | the same folder | **A pointer, not config.** Nothing but instance IDs, so `claudio attach` can infer one. Gitignored; deleting it costs only the convenience. |
+| `~/.claudio/` | your home directory | **Claudio's own state directory.** `config.yml`, `state.db`, repo roots, credentials. |
+
+`claudio create` prints the config path it resolved, so which file a command means is never left to inference.
 
 `home/` is bind-mounted to `/home/agent`. This makes the Claude Code session's own state — conversation transcripts, settings, shell history — durable across container rebuilds and readable from the host.
 
@@ -812,10 +824,14 @@ Configuration resolves in three layers, later winning:
 ```
 global config  <  repo .claudio.yml  <  local per-instance override
    what this        what this            what this run
-   machine allows   project needs        needs right now
+   machine allows   repo needs here      needs right now
 ```
 
-The split is not arbitrary — it follows what each fact is *about*. Ports and services are properties of the **project**, so they belong in the repo and should be versioned and shared. Resource ceilings are properties of the **machine**, so their baseline is global: not every machine is the same, and not every repo has the same needs.
+The split follows what each fact is *about*. Ports, services and hooks are properties of **this repo on this machine**. Resource ceilings are properties of the **machine** as a whole, so their baseline is global: not every machine is the same, and not every repo has the same needs.
+
+**Both files are local and uncommitted.** `.claudio.yml` was originally specified as "versioned, shared, committed" — a project-level file a team would check in. That was reversed in ROD-133. Committing it was not merely optional, it was load-bearing in a way nobody could see: `create` clones committed history only, so an *uncommitted* `.claudio.yml` never reached the instance and was silently ignored, while `ports --add` wrote its declarations into the worktree clone, a path the user has no view of. Two commands could read two different files and nothing said which won.
+
+A shared, committed config may return later, but as a **separate file** rather than an overload of this one — the two audiences turned out to need two files, not one file with two meanings.
 
 The global baseline applies to every new instance, whether created by cloning a repo or by `claudio create --new` on a fresh `git init` root. A repo that declares nothing simply inherits it.
 
@@ -827,9 +843,17 @@ Claudio defines its own schema rather than adopting `devcontainer.json`'s. The d
 
 Conventions: **`snake_case` throughout**, no camelCase anywhere. Every list-shaped key is a list, never "string or list". Unknown keys are an error, not silently ignored — a typo in `post_create` should say so rather than quietly doing nothing.
 
-#### `<repo>/.claudio.yml` — what the project needs
+#### `.claudio.yml` — what this repo needs, on this machine
 
-Versioned, shared, committed. Every key optional; a repo that declares nothing gets sensible defaults.
+**Local, gitignored, never committed.** Every key optional; a repo that declares nothing gets sensible defaults.
+
+It lives in the folder you work in — the directory you ran `claudio create .` from — and **the store records where that is** (`repos.source_dir`, migration003). The location is data, not convention: no upward search, no fallback chain, no ambiguity about which copy a command means. `claudio create` prints the path it resolved.
+
+An instance created from a remote URL (`claudio create acme/web`) has no folder you stand in, so for those the file is read from the worktree instead. That is the one fallback, and it exists because there is genuinely nowhere else to look.
+
+Claudio adds `.claudio.yml` to `.git/info/exclude` — machine-local git state, not a tracked file — so it never shows up as stray untracked noise. A repo that *already commits* a `.claudio.yml` is a case Claudio reports rather than fixes: `info/exclude` has no effect on a path git already tracks (verified), so `create` prints a one-time note naming `git rm --cached` and leaves the user's index alone. A source repo that already exists is never written to (§5.1).
+
+Inside the container, the agent is denied the edit tools on this file (`~/.claude/settings.json`, written by the entrypoint when absent). A permission rule rather than `sandbox.filesystem.denyWrite`: permission rules cover every tool, while the sandbox covers only Bash — and the sandbox is unavailable here regardless, since bubblewrap cannot create a namespace inside the container (verified: `Operation not permitted`, even as root, because Docker's default seccomp profile blocks it). It is advisory-grade — it stops the agent's own tools, not a determined `sh -c`. The container boundary is the real isolation.
 
 ```yaml
 image:
@@ -874,6 +898,8 @@ resources:                    # what THIS PROJECT needs; overridable locally
 
 #### `~/.claudio/config.yml` — what the machine allows
 
+Also local and uncommitted, and unlike `.claudio.yml` it applies to every instance regardless of repo.
+
 ```yaml
 workspace_root: ~/.claudio    # where repo roots and instances live
 
@@ -891,6 +917,8 @@ runtime:
 ```
 
 `resources` means the same thing in both files, which is what makes the §12.3 layering legible: the repo states a need, the machine states a limit, and the local layer settles it.
+
+Neither file is committed, so "the repo states a need" means the repo *as checked out on this machine* — see §12.3 on why the shared-config story was withdrawn.
 
 #### Interop
 

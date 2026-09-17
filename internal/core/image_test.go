@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rodrigomorales/claudio/internal/config"
 	"github.com/rodrigomorales/claudio/internal/coreerr"
 )
 
@@ -73,7 +74,7 @@ func TestEnsureImageAvailableExistingImageIsNil(t *testing.T) {
 // already-built image.
 func TestResolveImageExplicitOverrideWins(t *testing.T) {
 	worktreeDir := t.TempDir() // no .claudio.yml here — must not matter when explicit
-	image, hint, err := resolveImage("git@github.com:acme/web.git", worktreeDir, "my-custom-image:latest")
+	image, hint, err := resolveImage("git@github.com:acme/web.git", worktreeDir, filepath.Join(worktreeDir, config.FileName), "my-custom-image:latest")
 	if err != nil {
 		t.Fatalf("resolveImage: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestResolveImageExplicitOverrideWins(t *testing.T) {
 // behavior change for the common case.
 func TestResolveImageDefaultsToBaseWithNoImageConfig(t *testing.T) {
 	worktreeDir := t.TempDir()
-	image, hint, err := resolveImage("git@github.com:acme/web.git", worktreeDir, "")
+	image, hint, err := resolveImage("git@github.com:acme/web.git", worktreeDir, filepath.Join(worktreeDir, config.FileName), "")
 	if err != nil {
 		t.Fatalf("resolveImage: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestResolveImagePicksRepoTagWhenClaudioYmlAsksForOne(t *testing.T) {
 	}
 
 	repoURL := "git@github.com:acme/web.git"
-	image, hint, err := resolveImage(repoURL, worktreeDir, "")
+	image, hint, err := resolveImage(repoURL, worktreeDir, filepath.Join(worktreeDir, config.FileName), "")
 	if err != nil {
 		t.Fatalf("resolveImage: %v", err)
 	}

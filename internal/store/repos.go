@@ -4,6 +4,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -13,8 +15,15 @@ import (
 // with zero live worktrees is still known to `claudio gc` (ROD-107)
 // rather than being invisible once its last instance is destroyed.
 type Repo struct {
-	RootPath    string
-	RepoURL     string
+	RootPath string
+	RepoURL  string
+	// SourceDir is the user's own folder for a repo created with
+	// `claudio create .` — the directory they stand in, and the one place
+	// this repo's local .claudio.yml lives (ROD-133). nil for a repo
+	// cloned from a remote URL, which has no such folder; that is what
+	// tells config resolution to fall back to the worktree rather than
+	// guessing at a path.
+	SourceDir   *string
 	LastFetchAt *int64
 }
 
@@ -35,6 +44,50 @@ func (s *Store) UpsertRepo(ctx context.Context, rootPath, repoURL string) error 
 	return nil
 }
 
+// UpsertRepoWithSource records a root that was created from a local
+// directory (`claudio create .`), remembering that directory as the home
+// of this repo's local .claudio.yml (ROD-133).
+//
+// Separate from UpsertRepo rather than a nullable parameter on it so the
+// plain call can never blank a known source directory by omission: a
+// later `claudio create git@github.com:acme/web.git` against a root that
+// was first created from a folder still has config living in that folder,
+// and silently forgetting it there would resurrect exactly the
+// "which file is this reading?" ambiguity this column exists to end.
+// Passing a new sourceDir does replace the old one — a moved folder is a
+// real event, and the user's config moved with it.
+func (s *Store) UpsertRepoWithSource(ctx context.Context, rootPath, repoURL, sourceDir string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO repos (root_path, repo_url, source_dir) VALUES (?, ?, ?)
+		ON CONFLICT(root_path) DO UPDATE SET
+			repo_url = excluded.repo_url,
+			source_dir = excluded.source_dir`,
+		rootPath, repoURL, sourceDir)
+	if err != nil {
+		return fmt.Errorf("store: upsert repo %s: %w", rootPath, err)
+	}
+	return nil
+}
+
+// GetRepo returns the tracking row for rootPath. A root with no row is an
+// error rather than a zero value: callers use this to find where config
+// lives, and "I don't know this root" must not be indistinguishable from
+// "this root has no source directory" (which is a nil SourceDir on a row
+// that does exist).
+func (s *Store) GetRepo(ctx context.Context, rootPath string) (Repo, error) {
+	var r Repo
+	err := s.db.QueryRowContext(ctx,
+		`SELECT root_path, repo_url, source_dir, last_fetch_at FROM repos WHERE root_path = ?`,
+		rootPath).Scan(&r.RootPath, &r.RepoURL, &r.SourceDir, &r.LastFetchAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Repo{}, fmt.Errorf("store: no repo tracked at %s", rootPath)
+	}
+	if err != nil {
+		return Repo{}, fmt.Errorf("store: get repo %s: %w", rootPath, err)
+	}
+	return r, nil
+}
+
 // TouchRepoFetch records that rootPath's main clone was just fetched.
 func (s *Store) TouchRepoFetch(ctx context.Context, rootPath string, at int64) error {
 	_, err := s.db.ExecContext(ctx,
@@ -50,7 +103,7 @@ func (s *Store) TouchRepoFetch(ctx context.Context, rootPath string, at int64) e
 // with zero live instances.
 func (s *Store) ListRepos(ctx context.Context) ([]Repo, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT root_path, repo_url, last_fetch_at FROM repos ORDER BY root_path`)
+		`SELECT root_path, repo_url, source_dir, last_fetch_at FROM repos ORDER BY root_path`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list repos: %w", err)
 	}
@@ -59,7 +112,7 @@ func (s *Store) ListRepos(ctx context.Context) ([]Repo, error) {
 	var out []Repo
 	for rows.Next() {
 		var r Repo
-		if err := rows.Scan(&r.RootPath, &r.RepoURL, &r.LastFetchAt); err != nil {
+		if err := rows.Scan(&r.RootPath, &r.RepoURL, &r.SourceDir, &r.LastFetchAt); err != nil {
 			return nil, fmt.Errorf("store: scan repo: %w", err)
 		}
 		out = append(out, r)

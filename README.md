@@ -311,9 +311,13 @@ Full walkthrough, including how to check whether a container's port is actually 
 
 ## `.claudio.yml` and `config.yml`
 
-Two files, two audiences. `<repo>/.claudio.yml` is **what this project needs** — commit it, share it. `~/.claudio/config.yml` is **what this machine allows** — personal, uncommitted, applies to every instance regardless of repo.
+Two files, two scopes — **both local, neither committed.** `.claudio.yml` is **what this repo needs here** — ports, services, hooks. `~/.claudio/config.yml` is **what this machine allows** — resource ceilings, port range, editor; applies to every instance regardless of repo.
 
-Don't confuse either with `.claudio` (no extension), which `claudio create .` writes in your working directory. That one is neither config nor shared: it just records which instance IDs belong to that folder so commands can skip the ID. It's gitignored, and deleting it costs you nothing but the convenience.
+`.claudio.yml` lives in the folder you ran `claudio create .` from, and `claudio create` prints its path so you always know which file is in play. Claudio gitignores it for you. Edit it and the change takes effect on the next `create` or `restart` — no commit needed.
+
+If your repo already commits a `.claudio.yml`, Claudio still reads it from your folder and says so once: git keeps tracking a file it already tracks, so your local edits will show as changes until you run `git rm --cached .claudio.yml`. Claudio won't touch your git index for you.
+
+Don't confuse either with `.claudio` (no extension), which `claudio create .` also writes in your working directory. That one is neither config nor shared: it just records which instance IDs belong to that folder so commands can skip the ID. It's gitignored, and deleting it costs you nothing but the convenience.
 
 `.claudio.yml` (all fields optional):
 

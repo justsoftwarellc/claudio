@@ -266,3 +266,43 @@ func TestClassifySourceWorkingCopyFetchesFromItsUpstream(t *testing.T) {
 		t.Errorf("FetchURL = %q, want the upstream %q, not the working copy", src.FetchURL, up)
 	}
 }
+
+// A bare repository is a legitimate file:// source but is not a folder
+// anyone stands in, so it must never be recorded as the home of a
+// repo's .claudio.yml (ROD-133). Regression: treating it as one sent
+// every config read to <mirror>.git/.claudio.yml, silently losing an
+// image: section that lived in committed history.
+func TestUserSourceDirRejectsBareRepo(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	bare := filepath.Join(dir, "origin.git")
+	git(t, "", "init", "--bare", bare)
+
+	if got := UserSourceDir(ctx, "file://"+bare); got != "" {
+		t.Fatalf("UserSourceDir on a bare repo = %q, want \"\"", got)
+	}
+	// SourceDirFor still reports the path — the two functions answer
+	// different questions, which is the whole reason both exist.
+	if got := SourceDirFor("file://" + bare); got != bare {
+		t.Fatalf("SourceDirFor = %q, want %q", got, bare)
+	}
+}
+
+// A real working copy is the case `claudio create .` produces, and is
+// the one place config legitimately lives.
+func TestUserSourceDirAcceptsWorkingCopy(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	git(t, "", "init", dir)
+
+	if got := UserSourceDir(ctx, "file://"+dir); got != dir {
+		t.Fatalf("UserSourceDir on a working copy = %q, want %q", got, dir)
+	}
+}
+
+// A remote URL has no source directory at all.
+func TestUserSourceDirIgnoresRemoteURL(t *testing.T) {
+	if got := UserSourceDir(context.Background(), "git@github.com:acme/web.git"); got != "" {
+		t.Fatalf("UserSourceDir on a remote = %q, want \"\"", got)
+	}
+}

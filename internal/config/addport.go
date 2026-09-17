@@ -25,14 +25,17 @@ var ErrPortAlreadyDeclared = fmt.Errorf("config: port already declared")
 // file belongs to the user, so the edit is kept to the smallest one that
 // does the job — the ports list gains an entry and nothing else moves.
 //
-// Callers pass the instance worktree, whose .claudio.yml is what a
-// restart re-derives its ports from — that is what makes an added port
-// survive the restart rather than being released with the rest of the
-// instance's reservations. The edit is left uncommitted for the user to
+// Callers pass the resolved config path (core.resolveConfigPath), not a
+// directory: config is local and the store is what knows where it lives
+// (ROD-133). Before that, this appended "/.claudio.yml" to whatever
+// directory it was handed, which is how `ports --add` came to write into
+// the worktree clone — a file the user never sees.
+//
+// Writing to the same file a restart re-derives ports from is what makes
+// an added port survive the restart rather than being released with the
+// rest of the instance's reservations. The edit is left for the user to
 // keep or discard; this never commits on their behalf.
-func AddPortToRepoConfig(dir string, name string, container int) error {
-	path := dir + "/.claudio.yml"
-
+func AddPortToRepoConfig(path string, name string, container int) error {
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("config: read %s: %w", path, err)
