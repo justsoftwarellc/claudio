@@ -21,7 +21,7 @@ func writeYML(t *testing.T, dir, body string) string {
 
 func TestAddPortCreatesFileWhenAbsent(t *testing.T) {
 	dir := t.TempDir()
-	if err := AddPortToRepoConfig(dir, "manual-8080", 8080); err != nil {
+	if err := AddPortToRepoConfig(filepath.Join(dir, FileName), "manual-8080", 8080); err != nil {
 		t.Fatalf("AddPortToRepoConfig: %v", err)
 	}
 
@@ -38,7 +38,7 @@ func TestAddPortAppendsToExistingPorts(t *testing.T) {
 	dir := t.TempDir()
 	writeYML(t, dir, "ports:\n  - name: web\n    container: 3000\n")
 
-	if err := AddPortToRepoConfig(dir, "manual-8080", 8080); err != nil {
+	if err := AddPortToRepoConfig(filepath.Join(dir, FileName), "manual-8080", 8080); err != nil {
 		t.Fatalf("AddPortToRepoConfig: %v", err)
 	}
 
@@ -68,7 +68,7 @@ image:
     - ripgrep
 `)
 
-	if err := AddPortToRepoConfig(dir, "manual-8080", 8080); err != nil {
+	if err := AddPortToRepoConfig(filepath.Join(dir, FileName), "manual-8080", 8080); err != nil {
 		t.Fatalf("AddPortToRepoConfig: %v", err)
 	}
 
@@ -96,7 +96,7 @@ func TestAddPortRejectsDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	writeYML(t, dir, "ports:\n  - name: web\n    container: 3000\n")
 
-	err := AddPortToRepoConfig(dir, "manual-3000", 3000)
+	err := AddPortToRepoConfig(filepath.Join(dir, FileName), "manual-3000", 3000)
 	if !errors.Is(err, ErrPortAlreadyDeclared) {
 		t.Fatalf("AddPortToRepoConfig for an already-declared port = %v, want ErrPortAlreadyDeclared", err)
 	}
@@ -114,7 +114,7 @@ func TestAddPortIntoEmptyPortsKey(t *testing.T) {
 	dir := t.TempDir()
 	writeYML(t, dir, "ports:\n")
 
-	if err := AddPortToRepoConfig(dir, "manual-8080", 8080); err != nil {
+	if err := AddPortToRepoConfig(filepath.Join(dir, FileName), "manual-8080", 8080); err != nil {
 		t.Fatalf("AddPortToRepoConfig: %v", err)
 	}
 	cfg, err := LoadRepoConfig(filepath.Join(dir, ".claudio.yml"))

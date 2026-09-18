@@ -293,8 +293,9 @@ claudio create . --host-service db:5432
 
 Inside the container, `db:5432` is now that service. Repeat the flag for more than one. To make it permanent for everyone working on the repo, put it in `.claudio.yml` under `host_services:` instead.
 
-Two things worth knowing:
+Three things worth knowing:
 
+- **The service must be reachable on your host.** Claudio adds a hostname pointing at the host gateway, so a service in another container only works if that container *publishes* the port (`docker run -p 27017:27017 mongo:7`, not a bare `docker run mongo:7`). Check `docker ps` for a `->` in the `PORTS` column.
 - **The port is the same on both sides.** `--host-service db:5432` means "the thing on host port 5432, called `db` inside". There's no remapping — claudio adds a hostname, not a port forward — so `db:5432:6000` is refused rather than quietly not working.
 - **Only what you declare resolves.** An undeclared name doesn't work from inside the container. This is deliberate: pointing an instance at your own database is fine, an agent finding host services by guessing names is not. It's also why this is worth thinking about once before you turn it on — you are opening a door out of the sandbox, one name at a time.
 
@@ -306,11 +307,17 @@ web      published  3000       http://127.0.0.1:43001  detected (next.config.js)
 db       host       5432       db:5432                 declared (.claudio.yml)
 ```
 
+Full walkthrough, including how to check whether a container's port is actually published: [Reaching a Service Already on Your Machine](docs/site/docs/docs/guide/host-services.md).
+
 ## `.claudio.yml` and `config.yml`
 
-Two files, two audiences. `<repo>/.claudio.yml` is **what this project needs** — commit it, share it. `~/.claudio/config.yml` is **what this machine allows** — personal, uncommitted, applies to every instance regardless of repo.
+Two files, two scopes — **both local, neither committed.** `.claudio.yml` is **what this repo needs here** — ports, services, hooks. `~/.claudio/config.yml` is **what this machine allows** — resource ceilings, port range, editor; applies to every instance regardless of repo.
 
-Don't confuse either with `.claudio` (no extension), which `claudio create .` writes in your working directory. That one is neither config nor shared: it just records which instance IDs belong to that folder so commands can skip the ID. It's gitignored, and deleting it costs you nothing but the convenience.
+`.claudio.yml` lives in the folder you ran `claudio create .` from, and `claudio create` prints its path so you always know which file is in play. Claudio gitignores it for you. Edit it and the change takes effect on the next `create` or `restart` — no commit needed.
+
+If your repo already commits a `.claudio.yml`, Claudio still reads it from your folder and says so once: git keeps tracking a file it already tracks, so your local edits will show as changes until you run `git rm --cached .claudio.yml`. Claudio won't touch your git index for you.
+
+Don't confuse either with `.claudio` (no extension), which `claudio create .` also writes in your working directory. That one is neither config nor shared: it just records which instance IDs belong to that folder so commands can skip the ID. It's gitignored, and deleting it costs you nothing but the convenience.
 
 `.claudio.yml` (all fields optional):
 

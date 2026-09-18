@@ -7,6 +7,7 @@ package store
 var migrations = []string{
 	migration001,
 	migration002,
+	migration003,
 }
 
 const migration001 = `
@@ -73,4 +74,21 @@ CREATE INDEX idx_events_instance ON events(instance_id, created_at);
 // every row created before this migration.
 const migration002 = `
 ALTER TABLE instances ADD COLUMN compose_project TEXT;
+`
+
+// migration003 records where a repo's local .claudio.yml lives (ROD-133).
+//
+// The path is knowable today only by string-parsing repo_url's
+// "file://<path>" form, which is why two commands could read two
+// different files and neither could say which was authoritative. Config
+// is local, and the store is what knows where it is: an explicit column
+// makes that a fact to look up rather than a convention to re-derive.
+//
+// NULL means "no source directory" — an instance created from a remote
+// URL, which has no folder the user stands in — and is what the resolver
+// branches on to fall back to the worktree. Distinct from the empty
+// string, and the reason this is a nullable column rather than a
+// defaulted one.
+const migration003 = `
+ALTER TABLE repos ADD COLUMN source_dir TEXT;
 `

@@ -12,7 +12,41 @@ A local override always wins over what a repo's `.claudio.yml` asks for — `cre
 
 ## `.claudio.yml` and `config.yml`
 
-Two files, two audiences. `<repo>/.claudio.yml` is **what this project needs** — commit it, share it. `~/.claudio/config.yml` is **what this machine allows** — personal, uncommitted, applies to every instance regardless of repo.
+Two files, two scopes — **both local to your machine, neither committed.** `.claudio.yml` is **what this repo needs here** (ports, services, setup commands). `~/.claudio/config.yml` is **what this machine allows** (resource ceilings, port range, editor), and applies to every instance regardless of repo.
+
+### Where `.claudio.yml` lives
+
+In the folder you ran `claudio create .` from — the directory you actually work in. Not in the worktree, and not anywhere you have to go looking:
+
+```
+$ claudio create .
+Created brave-egret (branch claudio/brave-egret)
+Workspace: ~/.claudio/repos/github.com-acme-web/worktrees/brave-egret
+Config: /Users/you/Projects/web/.claudio.yml      ← your folder
+Ports: web:3000->43001
+```
+
+`create` prints the path it resolved, so you never have to guess which file a command is reading.
+
+Edit it and the change takes effect on the next `create` or `restart`. **No commit required** — Claudio reads the file on disk, and adds it to your repo's `.git/info/exclude` so it doesn't show up as stray untracked noise.
+
+An instance created from a remote URL (`claudio create acme/web`) has no folder of yours to put config in, so for those it's read from the worktree instead. `claudio create` prints that path too.
+
+:::note Already committing a `.claudio.yml`?
+Claudio still reads it from your folder, and tells you once:
+
+```
+note: .claudio.yml is tracked by git. Claudio treats it as local config,
+      so your edits to it will keep showing up as changes.
+      To make it local: git rm --cached .claudio.yml
+```
+
+Git keeps tracking a file it already tracks — nothing Claudio writes can change that — so your edits will show as changes until you untrack it yourself. Claudio never touches your git index.
+:::
+
+:::tip Three similar names
+`.claudio.yml` is config. `.claudio` (no extension) in the same folder is **not** config — it only records which instance IDs belong to that folder so you can skip typing them. `~/.claudio/` is Claudio's own state directory. All three are gitignored.
+:::
 
 `.claudio.yml` (all fields optional):
 
@@ -27,6 +61,10 @@ ports:
   - name: web
     container: 3000
     expose: false           # container-internal only; omit or true to publish to the host
+
+host_services:              # services already on YOUR machine — see Host Services
+  - name: mongo             #   inside the container: mongo:27017
+    host: 27017             #   the port it already listens on (must be published)
 
 services:                   # sidecars synthesized into a compose project — see Compose Sidecars
   - name: db

@@ -27,6 +27,7 @@ const sidebar = {
         { text: 'Getting Started', link: '/docs/guide/getting-started' },
         { text: 'Configuration', link: '/docs/guide/configuration' },
         { text: 'Adding a Database or Another Service', link: '/docs/guide/compose-sidecars' },
+        { text: 'Reaching a Service on Your Machine', link: '/docs/guide/host-services' },
         { text: 'Non-Obvious Decisions', link: '/docs/guide/non-obvious-decisions' },
         { text: 'Troubleshooting', link: '/docs/guide/troubleshooting' },
       ],

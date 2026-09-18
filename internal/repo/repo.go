@@ -13,6 +13,7 @@
 package repo
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -366,27 +367,83 @@ func BranchExists(ctx context.Context, root Root, branch string) bool {
 
 const envFileRelPath = ".claudio/env"
 
-// ExcludeClaudioDir adds .claudio/ to the main clone's
-// .git/info/exclude, so CopyEnvFile's target directory is never
-// accidentally committed or shown as untracked by `git status` inside
-// any worktree — docs/architecture.md §5.1: "--env-file copies a host
-// env file into the worktree at provision time. Add .claudio/ to
-// .git/info/exclude." info/exclude (not .gitignore) is used because
-// this is host-local provisioning behavior, not a rule the repo itself
-// should carry in its own committed history.
+// ConfigFileName is the repo config file, mirrored from internal/config
+// (which this package must not import — config has no business knowing
+// about git, and repo has no business decoding YAML).
+const ConfigFileName = ".claudio.yml"
+
+// ExcludeClaudioDir adds .claudio/ and .claudio.yml to the main clone's
+// .git/info/exclude, so neither is accidentally committed nor shown as
+// untracked by `git status` inside any worktree — docs/architecture.md
+// §5.1: "--env-file copies a host env file into the worktree at
+// provision time. Add .claudio/ to .git/info/exclude." info/exclude (not
+// .gitignore) is used because this is host-local provisioning behavior,
+// not a rule the repo itself should carry in its own committed history.
+//
+// .claudio.yml joins it under ROD-133: config is local and machine-local,
+// so a copy appearing in a worktree is Claudio's own working state, not
+// something the user meant to share. Note this only suppresses an
+// *untracked* file — verified: info/exclude has no effect on a path git
+// already tracks, which is why a repo that already commits a
+// .claudio.yml is warned about instead (see ConfigIsTracked).
 //
 // Idempotent and safe to call on every create against the same repo
-// root: appends the line only if it isn't already present.
+// root: appends each line only if it isn't already present.
 func ExcludeClaudioDir(root Root) error {
-	excludePath := filepath.Join(root.MainClone, ".git", "info", "exclude")
+	return excludePaths(filepath.Join(root.MainClone, ".git", "info", "exclude"),
+		".claudio/", ConfigFileName)
+}
+
+// ExcludeConfigInSourceDir does the same for the user's own repository,
+// so the local .claudio.yml Claudio reads and writes there does not show
+// up as a stray untracked file in their `git status` (ROD-133).
+//
+// Writing to .git/info/exclude rather than .gitignore is what keeps the
+// promise in docs/architecture.md §5.1 that a source repo which already
+// exists is never written to: info/exclude is machine-local git state,
+// not a tracked file in the user's working tree, so this changes nothing
+// they could accidentally commit.
+func ExcludeConfigInSourceDir(ctx context.Context, sourceDir string) error {
+	gitDir, err := runGit(ctx, sourceDir, "rev-parse", "--git-dir")
+	if err != nil {
+		return fmt.Errorf("repo: locate git dir for %s: %w", sourceDir, err)
+	}
+	dir := strings.TrimSpace(gitDir)
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(sourceDir, dir)
+	}
+	return excludePaths(filepath.Join(dir, "info", "exclude"), ConfigFileName)
+}
+
+// ConfigIsTracked reports whether sourceDir's git already tracks
+// .claudio.yml. A tracked file cannot be suppressed by info/exclude —
+// verified — so this is what lets a create warn the user rather than
+// silently leaving them with a config file that shows up dirty on every
+// local edit.
+func ConfigIsTracked(ctx context.Context, sourceDir string) bool {
+	_, err := runGit(ctx, sourceDir, "ls-files", "--error-unmatch", ConfigFileName)
+	return err == nil
+}
+
+func excludePaths(excludePath string, entries ...string) error {
 	existing, err := os.ReadFile(excludePath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("repo: read %s: %w", excludePath, err)
 	}
+
+	present := make(map[string]bool)
 	for _, line := range strings.Split(string(existing), "\n") {
-		if strings.TrimSpace(line) == ".claudio/" {
-			return nil // already present
+		present[strings.TrimSpace(line)] = true
+	}
+
+	var missing []string
+	for _, e := range entries {
+		if !present[e] {
+			missing = append(missing, e)
 		}
+	}
+	if len(missing) == 0 {
+		return nil
 	}
 
 	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
@@ -397,7 +454,17 @@ func ExcludeClaudioDir(root Root) error {
 		return fmt.Errorf("repo: open %s: %w", excludePath, err)
 	}
 	defer f.Close()
-	if _, err := f.WriteString(".claudio/\n"); err != nil {
+
+	// A file whose last line has no trailing newline would otherwise get
+	// the first entry glued onto it.
+	var buf bytes.Buffer
+	if len(existing) > 0 && !bytes.HasSuffix(existing, []byte("\n")) {
+		buf.WriteByte('\n')
+	}
+	for _, e := range missing {
+		buf.WriteString(e + "\n")
+	}
+	if _, err := f.Write(buf.Bytes()); err != nil {
 		return fmt.Errorf("repo: append to %s: %w", excludePath, err)
 	}
 	return nil

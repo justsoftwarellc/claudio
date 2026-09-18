@@ -19,6 +19,9 @@ type StatusStore interface {
 	PortMappings(ctx context.Context, instanceID string) ([]store.PortMapping, error)
 	TransitionDesiredState(ctx context.Context, instanceID string, to store.DesiredState) error
 	RecordEvent(ctx context.Context, instanceID string, kind store.EventKind, message string) error
+	// GetRepo locates this instance's config, which lives in the user's
+	// own folder rather than the worktree when there is one (ROD-133).
+	GetRepo(ctx context.Context, rootPath string) (store.Repo, error)
 }
 
 // GetInstanceView resolves one instance (by ID, name, or the store's own
@@ -45,7 +48,7 @@ func GetInstanceView(ctx context.Context, st StatusStore, dockerHost, idOrName s
 	// Best-effort, like every other live read in this function: a
 	// worktree that has been removed out of band should still produce a
 	// status view for the rest of the instance, not an error.
-	if repoCfg, err := config.LoadRepoConfig(inst.WorktreeDir + "/.claudio.yml"); err == nil {
+	if repoCfg, err := config.LoadRepoConfig(resolveConfigPath(ctx, st, inst.RepoRoot, inst.WorktreeDir)); err == nil {
 		for _, hs := range resolveHostServices(repoCfg.HostServices, nil) {
 			view.HostServices = append(view.HostServices, HostServiceView{Name: hs.Name, Port: hs.HostPort})
 		}

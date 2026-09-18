@@ -83,6 +83,40 @@ it is skipped on restart.
 MEMO
 fi
 
+# .claudio.yml is the user's own local config (ROD-133): it lives in the
+# folder they work in on the host, and Claudio reads and writes it there
+# on their behalf. The agent editing it would silently change the
+# instance's own ports, hooks and resource requests behind the user's
+# back, so deny the edit tools on it.
+#
+# A permission rule rather than sandbox.filesystem.denyWrite, which was
+# tried first: permission rules apply to every tool (Bash, Read, Edit,
+# MCP), while sandbox.filesystem applies only to Bash and its children.
+# The sandbox layer is unavailable here in any case — verified, bubblewrap
+# cannot create a namespace inside this container ("Creating new namespace
+# failed: Operation not permitted"), not as the agent user and not as
+# root, because Docker's default seccomp profile blocks it.
+#
+# This is advisory-grade: it stops the agent's own tools, not a
+# determined `sh -c`. The container boundary, not this file, is the real
+# isolation.
+#
+# Written only when absent, like CLAUDE.md above, so anything the user
+# adds here survives a container rebuild (home/ is bind-mounted, ROD-99).
+if [ ! -f "$HOME/.claude/settings.json" ]; then
+	mkdir -p "$HOME/.claude"
+	cat > "$HOME/.claude/settings.json" <<'SETTINGS'
+{
+  "permissions": {
+    "deny": [
+      "Edit(//repo/**/.claudio.yml)",
+      "Write(//repo/**/.claudio.yml)"
+    ]
+  }
+}
+SETTINGS
+fi
+
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
 	echo "entrypoint: no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY set." >&2
 	echo "entrypoint: the container has no credential to run Claude Code. See ROD-96." >&2

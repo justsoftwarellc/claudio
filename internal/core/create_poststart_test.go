@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rodrigomorales/claudio/internal/config"
 	"github.com/rodrigomorales/claudio/internal/engine"
 )
 
@@ -56,7 +57,7 @@ func TestRunPostStartRunsCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInstance: %v", err)
 	}
-	if err := runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, nil); err != nil {
+	if err := runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, filepath.Join(result.WorktreeDir, config.FileName), nil); err != nil {
 		t.Fatalf("runPostStart: %v", err)
 	}
 
@@ -83,7 +84,7 @@ func TestRunPostStartNoConfigIsNoop(t *testing.T) {
 	}
 	// No .claudio.yml at all — most repos declare no post_start, so this
 	// must be a silent no-op rather than an error.
-	if err := runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, nil); err != nil {
+	if err := runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, filepath.Join(result.WorktreeDir, config.FileName), nil); err != nil {
 		t.Fatalf("runPostStart with no config should be a no-op, got: %v", err)
 	}
 }
@@ -115,7 +116,7 @@ func TestRunPostStartDoesNotBlockOnLongRunningCommand(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, nil)
+		done <- runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, filepath.Join(result.WorktreeDir, config.FileName), nil)
 	}()
 
 	select {
@@ -163,7 +164,7 @@ func TestRunPostStartCapturesOutputToLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInstance: %v", err)
 	}
-	if err := runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, nil); err != nil {
+	if err := runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, filepath.Join(result.WorktreeDir, config.FileName), nil); err != nil {
 		t.Fatalf("runPostStart: %v", err)
 	}
 
@@ -209,7 +210,7 @@ func TestRunPostStartQuotesCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInstance: %v", err)
 	}
-	if err := runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, nil); err != nil {
+	if err := runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, filepath.Join(result.WorktreeDir, config.FileName), nil); err != nil {
 		t.Fatalf("runPostStart: %v", err)
 	}
 
@@ -249,7 +250,7 @@ func TestStartInstanceRerunsPostStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInstance: %v", err)
 	}
-	if err := runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, nil); err != nil {
+	if err := runPostStart(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, filepath.Join(result.WorktreeDir, config.FileName), nil); err != nil {
 		t.Fatalf("runPostStart (baseline): %v", err)
 	}
 	logPath := filepath.Join(result.WorktreeDir, "post-start-log.txt")

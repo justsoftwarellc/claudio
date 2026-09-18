@@ -19,3 +19,13 @@ These are internal-only (reached by service name, never published to the host) �
 `claudio stop`/`start`/`restart`/`destroy` all treat a compose-backed instance as a whole project: `stop` brings down every container (sidecar data survives, same as a single-container instance's workspace); `destroy` removes everything including sidecar volumes. `claudio status` shows each sidecar's live state; `claudio logs <id> --service db` reaches one sidecar's logs specifically (omit `--service` to interleave every service's logs).
 
 **Client tools, not the service itself, go in the agent image** — if your app needs `psql` or `redis-cli` to talk to a sidecar, declare that in [`.claudio.yml`'s `image:` section](./configuration.md), not as a service.
+
+## Already running it yourself?
+
+Everything above is for services the *repo* owns, started and stopped by claudio. If the thing you want is **already running on your machine** — a MongoDB container you keep up all day, a `docker compose` stack you started yourself — you don't need a second copy of it. Declare it as a [host service](./host-services.md) and the container reaches it by name:
+
+```bash
+claudio create . --host-service mongo:27017
+```
+
+The catch is that the container must publish its port to the host — see [Reaching a Service Already on Your Machine](./host-services.md) for why, and how to check.

@@ -36,6 +36,10 @@ type PortsStore interface {
 	GetInstance(ctx context.Context, idOrName string) (store.Instance, error)
 	AllocatePort(ctx context.Context, instanceID string, containerPort int, serviceName string, source store.PortSource, detectedFrom *string, rangeLow, rangeHigh int) (int, error)
 	ReleasePort(ctx context.Context, instanceID string, containerPort int) error
+	// GetRepo locates the instance's config file, which lives in the
+	// user's own folder when there is one (ROD-133) — the whole point of
+	// `ports --add` writing a declaration is that the user can see it.
+	GetRepo(ctx context.Context, rootPath string) (store.Repo, error)
 }
 
 // AddPort reserves a new host port for an already-existing instance's
@@ -43,7 +47,7 @@ type PortsStore interface {
 // Recorded with store.PortManual, matching AdoptContainer's convention
 // for a mapping the user asserted rather than one detection found.
 //
-// The port is also declared in the instance worktree's .claudio.yml,
+// The port is also declared in the instance's .claudio.yml,
 // because that file — not the store — is what a restart re-derives its
 // ports from (see allocatePorts). Without the declaration the store
 // reservation would be dropped by the very restart the user is told to
@@ -63,7 +67,7 @@ func AddPort(ctx context.Context, st PortsStore, idOrName string, containerPort 
 
 	// Declare it before reserving: a failure to record the port should be
 	// a plain error, not a reservation that silently vanishes on restart.
-	if err := config.AddPortToRepoConfig(inst.WorktreeDir, serviceName, containerPort); err != nil {
+	if err := config.AddPortToRepoConfig(resolveConfigPath(ctx, st, inst.RepoRoot, inst.WorktreeDir), serviceName, containerPort); err != nil {
 		if errors.Is(err, config.ErrPortAlreadyDeclared) {
 			return 0, coreerr.Wrap(coreerr.Conflict, op, err)
 		}

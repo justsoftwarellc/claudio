@@ -34,6 +34,8 @@ type CreateStore interface {
 	SetComposeProject(ctx context.Context, instanceID, project string) error
 	AllocatePort(ctx context.Context, instanceID string, containerPort int, serviceName string, source store.PortSource, detectedFrom *string, rangeLow, rangeHigh int) (int, error)
 	UpsertRepo(ctx context.Context, rootPath, repoURL string) error
+	UpsertRepoWithSource(ctx context.Context, rootPath, repoURL, sourceDir string) error
+	GetRepo(ctx context.Context, rootPath string) (store.Repo, error)
 }
 
 // CreateParams is everything `claudio create` collects from flags and
@@ -142,6 +144,19 @@ type CreateResult struct {
 	WorktreeDir string              `json:"worktree_dir"`
 	ContainerID string              `json:"container_id"`
 	Ports       []store.PortMapping `json:"ports,omitempty"`
+
+	// ConfigPath is the .claudio.yml this instance reads and writes —
+	// the user's own folder when there is one (ROD-133). Surfaced so
+	// `claudio create` can name it rather than leaving the user to guess
+	// which of two files a command meant.
+	ConfigPath string `json:"config_path,omitempty"`
+
+	// ConfigIsTracked reports that the user's repo already commits its
+	// .claudio.yml. Claudio treats it as local config either way, but git
+	// will keep showing their edits as changes — info/exclude cannot
+	// suppress a tracked path. The CLI turns this into a one-time note;
+	// nothing here touches the user's git index.
+	ConfigIsTracked bool `json:"config_is_tracked,omitempty"`
 }
 
 // CreateInstance runs the full provisioning state machine from
@@ -218,7 +233,28 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 			return CreateResult{}, coreerr.Wrap(coreerr.NotFound, op, err)
 		}
 	}
-	if err := st.UpsertRepo(ctx, root.Path, repoURL); err != nil {
+	// `claudio create .` is the case where the user has a folder of their
+	// own, and that folder — not the worktree clone — is where this
+	// repo's local .claudio.yml lives (ROD-133). Recording it here is
+	// what lets every later command find the file without re-deriving it
+	// from repo_url's file:// form, which is how two commands came to
+	// read two different files.
+	var sourceDirPtr *string
+	var configIsTracked bool
+	if sourceDir := repo.UserSourceDir(ctx, repoURL); sourceDir != "" {
+		sourceDirPtr = &sourceDir
+		if err := st.UpsertRepoWithSource(ctx, root.Path, repoURL, sourceDir); err != nil {
+			return CreateResult{}, coreerr.Wrap(coreerr.Internal, op, err)
+		}
+		// Best-effort: a repo whose git state cannot be read still gets an
+		// instance. Neither of these changes anything the user could
+		// commit — info/exclude is machine-local git state, and the
+		// tracked check only reads.
+		configIsTracked = repo.ConfigIsTracked(ctx, sourceDir)
+		if !configIsTracked {
+			_ = repo.ExcludeConfigInSourceDir(ctx, sourceDir)
+		}
+	} else if err := st.UpsertRepo(ctx, root.Path, repoURL); err != nil {
 		return CreateResult{}, coreerr.Wrap(coreerr.Internal, op, err)
 	}
 
@@ -241,12 +277,14 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		}
 	}
 
-	// Written into the worktree before provisioning, so a restart —
-	// which re-derives everything from this file and never sees the
-	// original flags — keeps resolving these names (ROD-128; the same
-	// disappearing-declaration bug ROD-123 fixed for `ports --add`).
+	// Written before provisioning, so a restart — which re-derives
+	// everything from this file and never sees the original flags — keeps
+	// resolving these names (ROD-128; the same disappearing-declaration
+	// bug ROD-123 fixed for `ports --add`). Lands in the user's own
+	// folder when there is one, so a declaration they did not type is at
+	// least somewhere they can see it (ROD-133).
 	for _, hs := range params.HostServices {
-		if err := config.AddHostServiceToRepoConfig(worktreeDir, hs); err != nil {
+		if err := config.AddHostServiceToRepoConfig(config.RepoConfigPath(sourceDirPtr, worktreeDir), hs); err != nil {
 			return CreateResult{}, coreerr.Wrap(coreerr.Internal, op+": declare host service in .claudio.yml", err)
 		}
 	}
@@ -299,11 +337,13 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 	}
 
 	return CreateResult{
-		InstanceID:  id,
-		Branch:      branch,
-		WorktreeDir: worktreeDir,
-		ContainerID: containerID,
-		Ports:       mappings,
+		InstanceID:      id,
+		Branch:          branch,
+		WorktreeDir:     worktreeDir,
+		ContainerID:     containerID,
+		Ports:           mappings,
+		ConfigPath:      config.RepoConfigPath(sourceDirPtr, worktreeDir),
+		ConfigIsTracked: configIsTracked,
 	}, nil
 }
 
@@ -333,7 +373,12 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
 
-	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
+	// Resolved once, here, and threaded down: every function below used to
+	// append "/.claudio.yml" to a directory of its own choosing, which is
+	// how two commands came to read two different files (ROD-133).
+	configPath := resolveConfigPath(ctx, st, repoRoot, worktreeDir)
+
+	repoCfg, err := config.LoadRepoConfig(configPath)
 	if err != nil {
 		return "", nil, failAndReturn(ctx, st, id, coreerr.Wrap(coreerr.InvalidInput, "load repo config", err))
 	}
@@ -350,12 +395,12 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 		return "", nil, failAndReturn(ctx, st, id, fmt.Errorf("create home dir: %w", err))
 	}
 
-	image, imageRepoHint, err := resolveImage(repoURL, worktreeDir, params.Image)
+	image, imageRepoHint, err := resolveImage(repoURL, worktreeDir, configPath, params.Image)
 	if err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
 
-	resources, overrideNote, err := resolveResources(worktreeDir, params.Resources, params.ResourceOverride)
+	resources, overrideNote, err := resolveResources(configPath, params.Resources, params.ResourceOverride)
 	if err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
@@ -427,7 +472,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 			return "", nil, failAndReturn(ctx, st, id, err)
 		}
 	} else {
-		ports, err = allocatePorts(ctx, st, id, worktreeDir, params)
+		ports, err = allocatePorts(ctx, st, id, worktreeDir, configPath, params)
 		if err != nil {
 			return "", nil, failAndReturn(ctx, st, id, err)
 		}
@@ -496,7 +541,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 	reportProgress(progress, store.StepContainerUp, fmt.Sprintf("container %s started", shortContainerID(containerID)))
 
 	if runPostCreateHook {
-		if err := runPostCreate(ctx, params.DockerHost, containerID, repoRoot, worktreeDir); err != nil {
+		if err := runPostCreate(ctx, params.DockerHost, containerID, repoRoot, worktreeDir, configPath); err != nil {
 			return "", nil, failAndReturn(ctx, st, id, err)
 		}
 	}
@@ -505,7 +550,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 	// whole purpose is to survive a restart (ROD-127). Runs after
 	// post_create so a first create installs dependencies before
 	// anything tries to start against them.
-	if err := runPostStart(ctx, params.DockerHost, containerID, repoRoot, worktreeDir, progress); err != nil {
+	if err := runPostStart(ctx, params.DockerHost, containerID, repoRoot, worktreeDir, configPath, progress); err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
 	}
 
@@ -532,8 +577,8 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 //
 // A missing .claudio.yml or an empty post_create list is not an error —
 // most repos declare neither, and provisioning must not require one.
-func runPostCreate(ctx context.Context, dockerHost, containerID, repoRoot, worktreeDir string) error {
-	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
+func runPostCreate(ctx context.Context, dockerHost, containerID, repoRoot, worktreeDir, configPath string) error {
+	repoCfg, err := config.LoadRepoConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("post_create: load repo config: %w", err)
 	}
@@ -598,8 +643,8 @@ const PostStartLogPath = "/tmp/claudio-post-start.log"
 // debug, not an instance that refuses to exist.
 //
 // A missing .claudio.yml or an empty post_start list is not an error.
-func runPostStart(ctx context.Context, dockerHost, containerID, repoRoot, worktreeDir string, progress ProgressFunc) error {
-	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
+func runPostStart(ctx context.Context, dockerHost, containerID, repoRoot, worktreeDir, configPath string, progress ProgressFunc) error {
+	repoCfg, err := config.LoadRepoConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("post_start: load repo config: %w", err)
 	}
@@ -688,8 +733,8 @@ func shellQuote(s string) string {
 // nothing to report — no override, or an override that doesn't conflict
 // with what the repo (or the global default, absent a repo request)
 // already resolved to.
-func resolveResources(worktreeDir string, global engine.ResourceLimits, override *config.Resources) (resources engine.ResourceLimits, note string, err error) {
-	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
+func resolveResources(configPath string, global engine.ResourceLimits, override *config.Resources) (resources engine.ResourceLimits, note string, err error) {
+	repoCfg, err := config.LoadRepoConfig(configPath)
 	if err != nil {
 		return engine.ResourceLimits{}, "", coreerr.Wrap(coreerr.InvalidInput, "resolve resources", err)
 	}
@@ -783,12 +828,16 @@ func formatBytes(n int64) string {
 	return fmt.Sprintf("%.1fg", float64(n)/gib)
 }
 
-func resolveImage(repoURL, worktreeDir, explicitImage string) (image, imageRepoHint string, err error) {
+// Like allocatePorts, this needs both paths for different reasons:
+// configPath is where the image: section is declared, while worktreeDir
+// is the Docker build context a repo-specific image is built from —
+// .claudio/Dockerfile and everything it COPYs live with the code.
+func resolveImage(repoURL, worktreeDir, configPath, explicitImage string) (image, imageRepoHint string, err error) {
 	if explicitImage != "" {
 		return explicitImage, "", nil
 	}
 
-	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
+	repoCfg, err := config.LoadRepoConfig(configPath)
 	if err != nil {
 		return "", "", coreerr.Wrap(coreerr.InvalidInput, "resolve image", err)
 	}
@@ -811,12 +860,16 @@ type resolvedPort struct {
 	HostPort int
 }
 
-func allocatePorts(ctx context.Context, st CreateStore, id, worktreeDir string, params CreateParams) ([]resolvedPort, error) {
+// worktreeDir and configPath are both needed and are not interchangeable:
+// framework detection reads the *code*, which only exists in the
+// worktree, while declared ports come from the user's own config file,
+// wherever the store says that lives (ROD-133).
+func allocatePorts(ctx context.Context, st CreateStore, id, worktreeDir, configPath string, params CreateParams) ([]resolvedPort, error) {
 	detected, err := portdetect.Detect(worktreeDir)
 	if err != nil {
 		return nil, coreerr.Wrap(coreerr.Internal, "detect ports", err)
 	}
-	repoCfg, err := config.LoadRepoConfig(worktreeDir + "/.claudio.yml")
+	repoCfg, err := config.LoadRepoConfig(configPath)
 	if err != nil {
 		return nil, coreerr.Wrap(coreerr.InvalidInput, "load repo config", err)
 	}

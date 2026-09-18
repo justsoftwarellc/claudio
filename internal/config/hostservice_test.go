@@ -4,6 +4,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -102,7 +103,7 @@ func TestLoadRepoConfigHostServiceValidation(t *testing.T) {
 // the same disappearing-declaration bug ROD-123 fixed for `ports --add`.
 func TestAddHostServiceToRepoConfigCreatesFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := AddHostServiceToRepoConfig(dir, HostService{Name: "db", Host: 5432}); err != nil {
+	if err := AddHostServiceToRepoConfig(filepath.Join(dir, FileName), HostService{Name: "db", Host: 5432}); err != nil {
 		t.Fatalf("AddHostServiceToRepoConfig: %v", err)
 	}
 
@@ -124,7 +125,7 @@ func TestAddHostServiceToRepoConfigPreservesOtherKeys(t *testing.T) {
 post_create:
   - npm ci
 `)
-	if err := AddHostServiceToRepoConfig(dir, HostService{Name: "db", Host: 5432}); err != nil {
+	if err := AddHostServiceToRepoConfig(filepath.Join(dir, FileName), HostService{Name: "db", Host: 5432}); err != nil {
 		t.Fatalf("AddHostServiceToRepoConfig: %v", err)
 	}
 
@@ -148,7 +149,7 @@ post_create:
 // instead would produce a file LoadRepoConfig then rejects as invalid.
 func TestAddHostServiceToRepoConfigReplacesSameName(t *testing.T) {
 	dir := writeConfig(t, "host_services:\n  - name: db\n    host: 5432\n")
-	if err := AddHostServiceToRepoConfig(dir, HostService{Name: "db", Host: 15432}); err != nil {
+	if err := AddHostServiceToRepoConfig(filepath.Join(dir, FileName), HostService{Name: "db", Host: 15432}); err != nil {
 		t.Fatalf("AddHostServiceToRepoConfig: %v", err)
 	}
 
@@ -168,7 +169,7 @@ func TestAddHostServiceToRepoConfigReplacesSameName(t *testing.T) {
 // rather than an empty sequence; appending to it must still work.
 func TestAddHostServiceToRepoConfigEmptyList(t *testing.T) {
 	dir := writeConfig(t, "host_services:\n")
-	if err := AddHostServiceToRepoConfig(dir, HostService{Name: "db", Host: 5432}); err != nil {
+	if err := AddHostServiceToRepoConfig(filepath.Join(dir, FileName), HostService{Name: "db", Host: 5432}); err != nil {
 		t.Fatalf("AddHostServiceToRepoConfig: %v", err)
 	}
 	cfg, err := LoadRepoConfig(dir + "/.claudio.yml")
@@ -184,7 +185,7 @@ func TestAddHostServiceToRepoConfigEmptyList(t *testing.T) {
 // noise in a file the user owns, and re-reading must be equivalent.
 func TestAddHostServiceToRepoConfigOmitsRedundantContainerPort(t *testing.T) {
 	dir := t.TempDir()
-	if err := AddHostServiceToRepoConfig(dir, HostService{Name: "db", Host: 5432}); err != nil {
+	if err := AddHostServiceToRepoConfig(filepath.Join(dir, FileName), HostService{Name: "db", Host: 5432}); err != nil {
 		t.Fatalf("AddHostServiceToRepoConfig: %v", err)
 	}
 	data, err := os.ReadFile(dir + "/.claudio.yml")

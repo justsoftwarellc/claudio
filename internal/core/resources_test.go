@@ -28,7 +28,7 @@ func TestResolveResourcesNoRepoConfigKeepsGlobalBaseline(t *testing.T) {
 	worktreeDir := t.TempDir()
 	global := engine.ResourceLimits{MemoryBytes: 6 << 30, NanoCPUs: 4_000_000_000, PIDs: 512}
 
-	resolved, note, err := resolveResources(worktreeDir, global, nil)
+	resolved, note, err := resolveResources(filepath.Join(worktreeDir, config.FileName), global, nil)
 	if err != nil {
 		t.Fatalf("resolveResources: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestResolveResourcesRepoOverridesGlobal(t *testing.T) {
 	writeClaudioYML(t, worktreeDir, "resources:\n  memory: 10g\n")
 	global := engine.ResourceLimits{MemoryBytes: 6 << 30, NanoCPUs: 4_000_000_000, PIDs: 512}
 
-	resolved, note, err := resolveResources(worktreeDir, global, nil)
+	resolved, note, err := resolveResources(filepath.Join(worktreeDir, config.FileName), global, nil)
 	if err != nil {
 		t.Fatalf("resolveResources: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestResolveResourcesLocalOverrideWinsAndReportsChange(t *testing.T) {
 	overrideMem := "2g"
 	override := &config.Resources{Memory: &overrideMem}
 
-	resolved, note, err := resolveResources(worktreeDir, global, override)
+	resolved, note, err := resolveResources(filepath.Join(worktreeDir, config.FileName), global, override)
 	if err != nil {
 		t.Fatalf("resolveResources: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestResolveResourcesOverrideMatchingRepoRequestProducesNoNote(t *testing.T)
 	overrideMem := "3g"
 	override := &config.Resources{Memory: &overrideMem}
 
-	resolved, note, err := resolveResources(worktreeDir, global, override)
+	resolved, note, err := resolveResources(filepath.Join(worktreeDir, config.FileName), global, override)
 	if err != nil {
 		t.Fatalf("resolveResources: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestResolveResourcesLocalOverrideWithNoRepoRequestProducesNoNote(t *testing
 	overrideMem := "2g"
 	override := &config.Resources{Memory: &overrideMem}
 
-	resolved, note, err := resolveResources(worktreeDir, global, override)
+	resolved, note, err := resolveResources(filepath.Join(worktreeDir, config.FileName), global, override)
 	if err != nil {
 		t.Fatalf("resolveResources: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestResolveResourcesOverrideCPUsAndPIDs(t *testing.T) {
 	cpus, pids := 2, 128
 	override := &config.Resources{CPUs: &cpus, PIDs: &pids}
 
-	resolved, _, err := resolveResources(worktreeDir, global, override)
+	resolved, _, err := resolveResources(filepath.Join(worktreeDir, config.FileName), global, override)
 	if err != nil {
 		t.Fatalf("resolveResources: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestResolveResourcesInvalidRepoMemoryIsInvalidInput(t *testing.T) {
 	worktreeDir := t.TempDir()
 	writeClaudioYML(t, worktreeDir, "resources:\n  memory: not-a-size\n")
 
-	_, _, err := resolveResources(worktreeDir, engine.ResourceLimits{}, nil)
+	_, _, err := resolveResources(filepath.Join(worktreeDir, config.FileName), engine.ResourceLimits{}, nil)
 	if err == nil {
 		t.Fatal("expected an error for an unparseable memory string")
 	}
@@ -184,7 +184,7 @@ func TestResolveResourcesInvalidOverrideMemoryIsInvalidInput(t *testing.T) {
 	bad := "not-a-size"
 	override := &config.Resources{Memory: &bad}
 
-	_, _, err := resolveResources(worktreeDir, engine.ResourceLimits{}, override)
+	_, _, err := resolveResources(filepath.Join(worktreeDir, config.FileName), engine.ResourceLimits{}, override)
 	if err == nil {
 		t.Fatal("expected an error for an unparseable memory string")
 	}
