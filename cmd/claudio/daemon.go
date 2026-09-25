@@ -20,11 +20,11 @@ func cmdDaemon(ctx context.Context, args []string) int {
 	}
 	switch args[0] {
 	case "status":
-		fmt.Println("No daemon in this phase — claudio runs entirely as a CLI (see docs/architecture.md §12.4).")
-		fmt.Println("The daemon arrives with runtime port discovery (ROD-101), which needs a long-lived listening socket.")
+		fmt.Println("No daemon — claudio runs entirely as a CLI.")
+		fmt.Println("A daemon arrives with runtime port discovery, which needs a long-lived listening socket.")
 		return 0
 	case "start", "stop":
-		fmt.Printf("claudio daemon %s: not applicable — no daemon exists in this phase (ROD-101 introduces it).\n", args[0])
+		fmt.Printf("claudio daemon %s: not applicable — no daemon exists yet.\n", args[0])
 		return 1
 	default:
 		fmt.Printf("claudio daemon: unknown subcommand %q\n", args[0])

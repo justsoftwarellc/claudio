@@ -278,15 +278,14 @@ post_create:
 
 This keeps `create` fast and predictable, and keeps the tool from guessing what a project's setup step should be (§12.4).
 
-#### Three files, three jobs
+#### Two names, two jobs
 
-Similar names, unrelated purposes. Worth stating plainly, because two of them sitting in the same directory was a genuine source of confusion (ROD-133):
-
-| File | Where | What it is |
+| Name | Where | What it is |
 |---|---|---|
-| `.claudio.yml` | the folder you ran `claudio create .` from | **Config.** Ports, services, hooks, image, resources. Local and gitignored; the store records its location (§12.4). |
-| `.claudio` (no extension) | the same folder | **A pointer, not config.** Nothing but instance IDs, so `claudio attach` can infer one. Gitignored; deleting it costs only the convenience. |
+| `.claudio.yml` | the folder you ran `claudio create .` from | **Config.** Ports, services, hooks, image, resources — plus the instance IDs tied to this folder, so `claudio attach` can infer one. Local and gitignored; the store records its location (§12.4). |
 | `~/.claudio/` | your home directory | **Claudio's own state directory.** `config.yml`, `state.db`, repo roots, credentials. |
+
+Instance IDs live in `.claudio.yml` rather than a pointer file of their own (ROD-133): a user who knows about one file should not have to learn that an extensionless sibling exists and means something else. Carrying IDs is also what settles the file's status — they are meaningless in anyone else's store, so the file is machine-local and gitignored rather than shared.
 
 `claudio create` prints the config path it resolved, so which file a command means is never left to inference.
 

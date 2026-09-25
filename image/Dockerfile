@@ -47,6 +47,53 @@ ENV PATH=/opt/claude-code/bin:$PATH
 RUN npm install -g @anthropic-ai/claude-code \
     && chmod -R a+rX /opt/claude-code
 
+# pnpm and yarn via corepack (ROD-139). corepack ships with Node 22 and
+# is already on PATH, but without `corepack enable` the shims do not
+# exist and `pnpm install` in a post_start hook dies with
+# "pnpm: not found" — detached, so it produces no CLI error at all
+# (ROD-138). That combination is what let a broken pnpm repo look like a
+# healthy instance.
+#
+# Enabled in the base rather than left to each repo's image.npm_global:
+# a package manager is not a project-specific dependency the way a CLI
+# tool is, and the opt-in route additionally requires `claudio image
+# build --repo <path>` before create will work at all, since a declared
+# image: section makes the repo layer mandatory (core.EnsureImageAvailable).
+# Making the common case need no declaration is the whole fix.
+#
+# Shims land in NPM_CONFIG_PREFIX (/opt/claude-code/bin), which is
+# root-owned, so they need the same a+rX as the install above — the
+# agent user only ever reads this path.
+RUN corepack enable --install-directory /opt/claude-code/bin \
+    && COREPACK_HOME=/opt/corepack corepack install --global pnpm@latest yarn@latest \
+    # Warm the shim once so pnpm's own wrapper fetches the platform
+    # binary it prefers (@pnpm/exe.<platform>) into the cache now, at
+    # build time, rather than on the user's first post_start. Without
+    # this the cached JS package is present but the shim still reaches
+    # for the network — verified offline, where it fails outright.
+    && COREPACK_HOME=/opt/corepack /opt/claude-code/bin/pnpm --version \
+    && chmod -R a+rX /opt/claude-code \
+    && chown -R "${USER_UID}:${USER_GID}" /opt/corepack
+
+# corepack's shims resolve the real binary out of COREPACK_HOME, which
+# defaults to a per-user cache under $HOME. Two reasons that default is
+# wrong here, both verified: a bind mount at /home/agent shadows anything
+# baked into it (the same failure that moved the npm prefix to /opt
+# above), and an unprimed cache makes the shim *download* pnpm on first
+# use — which fails with no network and turns a post_start `pnpm install`
+# into an error the user never sees. Priming /opt/corepack at build time
+# and pointing every shell at it keeps the common case hermetic.
+#
+# agent-owned, not root-owned a+rX like the install above: corepack
+# *writes* to this directory whenever the version it needs isn't already
+# cached, which is exactly what a repo pinning `"packageManager":
+# "pnpm@x.y.z"` in package.json asks it to do. Verified the hard way — a
+# read-only cache turns that very ordinary repo into a hard failure
+# ("Failed to create cache directory"), trading the missing-pnpm bug for
+# a worse one. Writable means the pin downloads once and is then cached
+# like any other version.
+ENV COREPACK_HOME=/opt/corepack
+
 # Docker's ENV PATH only reaches processes Docker launches directly
 # (the entrypoint). A tmux pane's shell is an interactive/login shell
 # that re-reads its own startup files and resets PATH to the system
@@ -54,7 +101,10 @@ RUN npm install -g @anthropic-ai/claude-code \
 # "command not found" inside the tmux pane. /etc/profile.d runs for
 # every login shell regardless of which user's dotfiles exist, so this
 # is the one place that reliably reaches the tmux pane's shell too.
-RUN echo 'export PATH=/opt/claude-code/bin:$PATH' > /etc/profile.d/claudio-npm-global.sh
+# COREPACK_HOME rides along for the same reason: the ENV above reaches
+# the entrypoint but not a tmux pane's login shell, and a shim that
+# cannot find its primed cache falls back to downloading pnpm again.
+RUN printf 'export PATH=/opt/claude-code/bin:$PATH\nexport COREPACK_HOME=/opt/corepack\n' > /etc/profile.d/claudio-npm-global.sh
 
 # Onboarding pre-seed template — see entrypoint.sh for why this can no
 # longer be written directly to /home/agent/.claude.json at build time.

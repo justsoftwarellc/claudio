@@ -11,7 +11,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/rodrigomorales/claudio/internal/client"
-	"github.com/rodrigomorales/claudio/internal/instancefile"
+	"github.com/rodrigomorales/claudio/internal/config"
 	"github.com/rodrigomorales/claudio/internal/store"
 )
 
@@ -29,7 +29,7 @@ func lookupVia(ctx context.Context, c client.Client) instanceLookup {
 }
 
 // resolveInstanceID turns a command's positional arguments into the
-// instance id to act on, falling back to the nearest `.claudio` file
+// instance id to act on, falling back to the nearest `.claudio.yml`
 // when no id was given (ROD-117).
 //
 // The rules, in order:
@@ -58,14 +58,14 @@ func resolveInstanceID(args []string, startDir string, lookup instanceLookup) (i
 		return args[0], "", nil
 	}
 
-	dir, ids, err := instancefile.Find(startDir)
+	dir, ids, err := config.FindInstances(startDir)
 	if err != nil {
 		return "", "", err
 	}
 	if dir == "" || len(ids) == 0 {
-		return "", "", fmt.Errorf("no instance id given, and no %s file found in this directory or any parent.\n"+
+		return "", "", fmt.Errorf("no instance id given, and no %s listing instances was found in this directory or any parent.\n"+
 			"  Pass an id (see `claudio ls`), or run this from a directory where you ran `claudio create .`",
-			instancefile.FileName)
+			config.FileName)
 	}
 
 	var live []store.Instance
@@ -87,14 +87,14 @@ func resolveInstanceID(args []string, startDir string, lookup instanceLookup) (i
 			line = "lines"
 		}
 		warning = fmt.Sprintf("! %s lists %s — skipping.\n  Remove the %s from %s to silence this.",
-			instancefile.FileName, subject, line, filepath.Join(dir, instancefile.FileName))
+			config.FileName, subject, line, filepath.Join(dir, config.FileName))
 	}
 
 	switch len(live) {
 	case 0:
 		return "", "", fmt.Errorf("every instance listed in %s/%s is gone (%s).\n"+
 			"  Pass an id (see `claudio ls`), or run `claudio create .` to make a new one",
-			dir, instancefile.FileName, strings.Join(stale, ", "))
+			dir, config.FileName, strings.Join(stale, ", "))
 	case 1:
 		return live[0].ID, warning, nil
 	default:
@@ -146,13 +146,13 @@ func resolveIDWithClient(ctx context.Context, c client.Client, args []string, ca
 // itself was created successfully, and losing the convenience pointer is
 // not worth failing that.
 func recordInstance(sourceDir, id string) (notice string) {
-	if err := instancefile.Append(sourceDir, id); err != nil {
+	if err := config.AppendInstance(sourceDir, id); err != nil {
 		fmt.Fprintf(os.Stderr, "! could not record this instance in %s: %v\n",
-			filepath.Join(sourceDir, instancefile.FileName), err)
+			filepath.Join(sourceDir, config.FileName), err)
 		return ""
 	}
 
-	ids, _, err := instancefile.Load(sourceDir)
+	ids, _, err := config.LoadInstances(sourceDir)
 	if err != nil || len(ids) <= 1 {
 		return ""
 	}
@@ -160,7 +160,7 @@ func recordInstance(sourceDir, id string) (notice string) {
 		len(ids), strings.Join(ids, ", "))
 }
 
-// forgetInstance drops a destroyed instance's id from the pointer file,
+// forgetInstance drops a destroyed instance's id from .claudio.yml,
 // if the command was run from the directory that owns it. Best-effort
 // and silent: destroy has already succeeded by this point, and a stale
 // line left behind is handled gracefully by resolveInstanceID anyway.
@@ -169,9 +169,9 @@ func forgetInstance(id string) {
 	if err != nil {
 		return
 	}
-	dir, _, err := instancefile.Find(cwd)
+	dir, _, err := config.FindInstances(cwd)
 	if err != nil || dir == "" {
 		return
 	}
-	_ = instancefile.Remove(dir, id)
+	_ = config.RemoveInstance(dir, id)
 }

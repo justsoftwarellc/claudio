@@ -1,6 +1,6 @@
 # Reaching a Service Already on Your Machine
 
-[Sidecars](./compose-sidecars.md) are for services the *repo* owns — claudio starts them, and they live and die with the instance. This page is the other case: the thing you want is **already running on your machine** and you don't want a second copy of it. A MongoDB container you keep up all day, a Postgres from a `docker compose` stack you started yourself, an API server on another port.
+[Sidecars](./compose-sidecars.md) are for services the *repo* owns: claudio starts them, and they live and die with the instance. This page covers the other case — a service **already running on your machine** that you don't want a second copy of, like a MongoDB container you keep up all day.
 
 Declare it, and the container reaches it by name:
 
@@ -8,9 +8,9 @@ Declare it, and the container reaches it by name:
 claudio create . --host-service mongo:27017
 ```
 
-Inside the container, `mongo:27017` is now that service — so `mongodb://mongo:27017/myapp` works from your app without changing a line of code. Repeat the flag for more than one service.
+Inside the container, `mongo:27017` is that service, so `mongodb://mongo:27017/myapp` works unchanged. Repeat the flag for more than one service.
 
-To make it permanent for everyone working on the repo, put it in `.claudio.yml` instead:
+To make it permanent for this repo, put it in `.claudio.yml` instead:
 
 ```yaml
 host_services:
@@ -18,13 +18,11 @@ host_services:
     host: 27017         # the port it already listens on, on your host
 ```
 
-A `--host-service` flag wins over the repo's declaration of the same name, so you can point `mongo` somewhere else for one instance without editing the committed file.
+A `--host-service` flag wins over a `.claudio.yml` declaration of the same name, so one instance can point `mongo` elsewhere without editing the file.
 
 ## The one requirement: the container must publish a port
 
-This is the part that trips people up, and it is worth being precise about.
-
-Claudio adds a **hostname**, not a tunnel. Each declared name becomes an `/etc/hosts` entry pointing at the *host gateway* — the address of your machine as seen from inside the container. So the service has to be reachable **on your host**, at that port.
+Claudio adds a **hostname**, not a tunnel. Each declared name becomes an `/etc/hosts` entry pointing at the host gateway — your machine's address as seen from inside the container. The service must therefore be reachable **on your host**, at that port.
 
 For a service running in another container, that means it was started with a published port:
 
@@ -44,25 +42,25 @@ PORTS
 27017/tcp                    ❌ container-internal only
 ```
 
-If it isn't published, you have three options: restart it with `-p 27017:27017`, add a `ports:` entry to whatever compose file starts it, or — if the service really belongs to this project — let claudio own it as a [sidecar](./compose-sidecars.md) instead.
+If it isn't published: restart it with `-p 27017:27017`, add a `ports:` entry to the compose file that starts it, or let claudio own it as a [sidecar](./compose-sidecars.md).
 
-The same rule covers non-container services. A Postgres installed with Homebrew and listening on `localhost:5432` is already "on the host", so `--host-service db:5432` reaches it with nothing further to do.
+Non-container services follow the same rule. A Homebrew Postgres listening on `localhost:5432` is already on the host, so `--host-service db:5432` reaches it directly.
 
 ## The port is the same on both sides
 
 `--host-service mongo:27017` means "the thing on host port 27017, called `mongo` inside". There is no remapping.
 
-A hosts entry maps a name to an *address*; there is no port component anywhere in it, so "reach host 27017 as `mongo:6000`" is not something this mechanism can express. Claudio rejects `mongo:27017:6000` with an explanation rather than accepting it and resolving the name to a port where nothing is listening.
+A hosts entry maps a name to an *address* and has no port component, so "reach host 27017 as `mongo:6000`" can't be expressed. Claudio rejects `mongo:27017:6000` rather than resolving the name to a port where nothing is listening.
 
-If your code hardcodes a port that differs from the one the service actually uses, change the connection string — or publish the service on the port your code expects.
+If your code hardcodes a different port, change the connection string or publish the service on the port it expects.
 
 ## Only what you declare resolves
 
-An undeclared name does not work from inside the container. This is deliberate: pointing an instance at your own database is a reasonable thing to want, an agent discovering host services by guessing names is not.
+An undeclared name does not resolve inside the container. Pointing an instance at your own database is reasonable; an agent discovering host services by guessing names is not.
 
-It's also why this is worth thinking about once before turning it on. A host service is a door out of the sandbox, opened one name at a time — the service you name is genuinely reachable from inside the container, with whatever access it grants to anyone who can reach it.
+So weigh each one: a host service is a door out of the sandbox, opened a name at a time. The service you name is reachable from inside the container, with whatever access it grants to anyone who reaches it.
 
-One name is always mapped: `host.docker.internal`, which resolves to your host on every runtime. That grants no access by itself — it's a name for an address the container's network could already route to — but it means a declared service is the *only* new reachability you're adding.
+One name is always mapped: `host.docker.internal`, which resolves to your host on every runtime. It grants no access by itself — the container's network could already route to that address — so a declared service is the only new reachability you add.
 
 ## Seeing what's wired up
 
@@ -74,7 +72,7 @@ web      published  3000       http://127.0.0.1:43001  detected (next.config.js)
 mongo    host       27017      mongo:27017             declared (.claudio.yml)
 ```
 
-A `published` row is a port of yours the host can dial. A `host` row is a name your container can dial, rendered as the in-container address rather than a host URL, because that is the form you'd actually put in a connection string.
+A `published` row is a port the host can dial. A `host` row is a name the container can dial, shown as the in-container address — the form you'd put in a connection string.
 
 ## Checking it from inside
 
@@ -90,9 +88,9 @@ docker exec claudio-<id> node -e 'require("net").connect(27017,"mongo")
   .on("error",e=>{console.log("closed:",e.code);process.exit(1)})'
 ```
 
-(The agent image ships Node and `curl`, but not `nc` — hence the one-liner.)
+(The agent image ships Node and `curl`, but not `nc`.)
 
-A name that resolves but refuses the connection is the signature of an unpublished container port — step back to [the publishing rule](#the-one-requirement-the-container-must-publish-a-port).
+A name that resolves but refuses the connection means an unpublished container port — see [the publishing rule](#the-one-requirement-the-container-must-publish-a-port).
 
 ## A full example
 
@@ -119,4 +117,4 @@ post_start:
 MONGO_URL=mongodb://mongo:27017/myapp
 ```
 
-Every instance created from this repo reaches the same MongoDB, and the connection string is identical to the one you use on the host — which is the point. Note that all instances share that one database; if you want each instance to get its own, that's a [sidecar](./compose-sidecars.md), not a host service.
+Every instance created from this repo reaches the same MongoDB, with the same connection string you use on the host. All instances share that one database — for a database per instance, use a [sidecar](./compose-sidecars.md).

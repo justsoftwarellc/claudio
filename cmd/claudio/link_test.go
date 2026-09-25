@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rodrigomorales/claudio/internal/config"
 	"github.com/rodrigomorales/claudio/internal/core"
-	"github.com/rodrigomorales/claudio/internal/instancefile"
 	"github.com/rodrigomorales/claudio/internal/store"
 )
 
@@ -101,7 +101,7 @@ func TestLinkWritesFileAndIgnoresIt(t *testing.T) {
 		t.Errorf("message %q does not name the linked instance", msg)
 	}
 
-	ids, _, err := instancefile.Load(dir)
+	ids, _, err := config.LoadInstances(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +112,8 @@ func TestLinkWritesFileAndIgnoresIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	if !strings.Contains(string(data), instancefile.FileName) {
-		t.Errorf(".gitignore does not cover %s:\n%s", instancefile.FileName, data)
+	if !strings.Contains(string(data), config.FileName) {
+		t.Errorf(".gitignore does not cover %s:\n%s", config.FileName, data)
 	}
 }
 
@@ -134,7 +134,7 @@ func TestLinkTwiceIsANoOp(t *testing.T) {
 		t.Errorf("message %q does not say the instance was already linked", msg)
 	}
 
-	ids, _, err := instancefile.Load(dir)
+	ids, _, err := config.LoadInstances(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestLinkWarnsOnRepoMismatch(t *testing.T) {
 		t.Errorf("message %q does not mention the mismatched repo", msg)
 	}
 
-	ids, _, err := instancefile.Load(dir)
+	ids, _, err := config.LoadInstances(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestLinkWarnsOnRepoMismatch(t *testing.T) {
 
 func TestLinkAppendsToExistingFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := instancefile.Append(dir, "first1"); err != nil {
+	if err := config.AppendInstance(dir, "first1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,7 +176,7 @@ func TestLinkAppendsToExistingFile(t *testing.T) {
 		t.Fatalf("linkInstance: %v", err)
 	}
 
-	ids, _, err := instancefile.Load(dir)
+	ids, _, err := config.LoadInstances(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestLinkAppendsToExistingFile(t *testing.T) {
 func TestUnlinkRemovesOnlyTheNamedID(t *testing.T) {
 	dir := t.TempDir()
 	for _, id := range []string{"a3f9c2", "b7d1e4"} {
-		if err := instancefile.Append(dir, id); err != nil {
+		if err := config.AppendInstance(dir, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -201,7 +201,7 @@ func TestUnlinkRemovesOnlyTheNamedID(t *testing.T) {
 		t.Errorf("message %q does not name the unlinked instance", msg)
 	}
 
-	ids, _, err := instancefile.Load(dir)
+	ids, _, err := config.LoadInstances(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,11 +210,17 @@ func TestUnlinkRemovesOnlyTheNamedID(t *testing.T) {
 	}
 }
 
-// Unlinking the last id removes the file, and the message should say so
-// — the directory has stopped being a Claudio directory.
-func TestUnlinkLastIDDeletesFileAndSaysSo(t *testing.T) {
+// Unlinking the last id clears the instance list but keeps the file and
+// everything else in it. The file is the user's config, not Claudio's
+// bookkeeping: unlinking an instance must not delete their image and
+// ports settings along with it.
+func TestUnlinkLastIDKeepsConfig(t *testing.T) {
 	dir := t.TempDir()
-	if err := instancefile.Append(dir, "a3f9c2"); err != nil {
+	path := filepath.Join(dir, config.FileName)
+	if err := os.WriteFile(path, []byte("image:\n  apt: [ripgrep]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.AppendInstance(dir, "a3f9c2"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -222,17 +228,30 @@ func TestUnlinkLastIDDeletesFileAndSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unlinkInstance: %v", err)
 	}
-	if !strings.Contains(msg, instancefile.FileName) {
-		t.Errorf("message %q does not mention removing %s", msg, instancefile.FileName)
+	if !strings.Contains(msg, config.FileName) {
+		t.Errorf("message %q does not name %s", msg, config.FileName)
 	}
-	if _, err := os.Stat(filepath.Join(dir, instancefile.FileName)); !os.IsNotExist(err) {
-		t.Errorf("%s still exists after unlinking the last id", instancefile.FileName)
+
+	ids, _, err := config.LoadInstances(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("ids = %v, want none after unlinking the last id", ids)
+	}
+
+	cfg, err := config.LoadRepoConfig(path)
+	if err != nil {
+		t.Fatalf("LoadRepoConfig after unlink: %v", err)
+	}
+	if len(cfg.Image.Apt) != 1 || cfg.Image.Apt[0] != "ripgrep" {
+		t.Errorf("image.apt = %v, want [ripgrep] preserved through unlink", cfg.Image.Apt)
 	}
 }
 
 func TestUnlinkNotLinkedIsAnError(t *testing.T) {
 	dir := t.TempDir()
-	if err := instancefile.Append(dir, "a3f9c2"); err != nil {
+	if err := config.AppendInstance(dir, "a3f9c2"); err != nil {
 		t.Fatal(err)
 	}
 

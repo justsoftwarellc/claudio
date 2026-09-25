@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rodrigomorales/claudio/internal/instancefile"
+	"github.com/rodrigomorales/claudio/internal/config"
 	"github.com/rodrigomorales/claudio/internal/store"
 )
 
@@ -45,7 +45,7 @@ func TestResolveExplicitIDWins(t *testing.T) {
 // ambiguous file never blocks a command the user fully specified.
 func TestResolveExplicitIDIgnoresMalformedFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, instancefile.FileName), []byte("instances: [unclosed\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, config.FileName), []byte("instances: [unclosed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,7 +132,7 @@ func TestResolveDoesNotRewriteFileOnStaleID(t *testing.T) {
 		t.Fatalf("resolveInstanceID: %v", err)
 	}
 
-	ids, _, err := instancefile.Load(dir)
+	ids, _, err := config.LoadInstances(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestResolveNoFileNamesBothWaysOut(t *testing.T) {
 
 func TestResolveMalformedFileReportsIt(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, instancefile.FileName), []byte("instances: [unclosed\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, config.FileName), []byte("instances: [unclosed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -191,7 +191,7 @@ func tempDirWithInstances(t *testing.T, ids ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	for _, id := range ids {
-		if err := instancefile.Append(dir, id); err != nil {
+		if err := config.AppendInstance(dir, id); err != nil {
 			t.Fatalf("seed %s: %v", id, err)
 		}
 	}

@@ -158,11 +158,11 @@ claudio attach: 2 instances are tied to /Users/you/Projects/my-app:
 Pass one explicitly, e.g. swift-dingo
 ```
 
-An explicit ID always wins. Two instances can't share a branch — claudio catches that and suggests a free name. `destroy` removes the ID it destroyed from `.claudio`; an ID that goes stale another way is reported and skipped, so one dead entry doesn't break the rest.
+An explicit ID always wins. Two instances can't share a branch — claudio catches that and suggests a free name. `destroy` removes the ID it destroyed from `.claudio.yml`; an ID that goes stale another way is reported and skipped, so one dead entry doesn't break the rest.
 
 ### Linking an instance you already have
 
-`create .` is not the only way an instance ends up belonging to a folder. One created from a remote URL has no local source directory, an adopted one has no create-time directory at all, and anything created before this feature existed was never recorded. `claudio link` ties any of them to the directory you're standing in:
+`create .` is not the only way an instance ends up belonging to a folder: one created from a remote URL has no local source directory, and an adopted one has no create-time directory at all. `claudio link` ties either to the directory you're standing in:
 
 ```bash
 cd ~/Projects/my-app
@@ -170,9 +170,9 @@ claudio link brave-otter    # or bare `claudio link` to pick from a list
 claudio attach              # now works with no ID
 ```
 
-With no ID it lists your instances and asks which one — putting any whose repo matches the current directory first. If it's not a terminal (a script, a pipe), it prints the list and exits instead of hanging.
+With no ID it lists your instances and asks which one, putting any whose repo matches the current directory first. In a script or pipe it prints the list and exits rather than hanging.
 
-`claudio unlink [<id>]` is the undo. It only edits `.claudio` — the instance keeps running, and unlinking the last one deletes the file.
+`claudio unlink [<id>]` is the undo. It only removes the ID from `.claudio.yml` — the instance keeps running, and the rest of the file is left alone.
 
 ## Cloning
 
@@ -210,7 +210,7 @@ The default offered is the branch you currently have checked out. `--base-branch
 
 A directory with **no** `origin` — a prototype that has never been pushed — skips all of this; there's nothing to fetch from. Push it to GitHub later and the next `create` picks the new remote up automatically, with nothing to re-run.
 
-`create .` also writes a `.claudio` file recording the instance it made, so commands run from that directory (or any subdirectory) don't need the ID:
+`create .` also records the instance in `.claudio.yml`, so commands run from that directory (or any subdirectory) don't need the ID:
 
 ```bash
 cd ~/Projects/my-app
@@ -219,7 +219,7 @@ claudio attach          # no ID needed
 claudio rebuild         # likewise
 ```
 
-The file is added to `.gitignore` — the ID is local to your machine and means nothing in anyone else's store. See [Working with several instances](#working-with-several-instances) for what happens when a directory has more than one.
+The file is added to `.gitignore` — IDs are local to your machine and mean nothing in anyone else's store. See [Working with several instances](#working-with-several-instances) for what happens when a directory has more than one.
 
 What comes along is what's **committed**:
 
@@ -258,7 +258,7 @@ Every instance gets a memory/CPU/PID ceiling so a runaway build in one container
 claudio create git@github.com:acme/web.git --memory 10g --cpus 6 --pids 1024
 ```
 
-A local override always wins over what a repo's `.claudio.yml` asks for — `create` tells you when it's doing that, rather than silently picking a different number than what's committed. If an instance gets killed for exceeding its memory limit, `claudio ls`/`claudio status` say so explicitly (colored, and distinct from a plain stop) instead of leaving you to guess why it stopped.
+A local override always wins over what a repo's `.claudio.yml` asks for — `create` tells you when it's doing that, rather than silently picking a different number than what's committed. The override is recorded in `.claudio.yml` so it survives `claudio restart`, which takes no resource flags of its own and re-derives every limit from that file. If an instance gets killed for exceeding its memory limit, `claudio ls`/`claudio status` say so explicitly (colored, and distinct from a plain stop) instead of leaving you to guess why it stopped.
 
 ## Adding a database or another service
 
@@ -311,13 +311,14 @@ Full walkthrough, including how to check whether a container's port is actually 
 
 ## `.claudio.yml` and `config.yml`
 
-Two files, two scopes — **both local, neither committed.** `.claudio.yml` is **what this repo needs here** — ports, services, hooks. `~/.claudio/config.yml` is **what this machine allows** — resource ceilings, port range, editor; applies to every instance regardless of repo.
+Two files, both local and neither committed:
 
-`.claudio.yml` lives in the folder you ran `claudio create .` from, and `claudio create` prints its path so you always know which file is in play. Claudio gitignores it for you. Edit it and the change takes effect on the next `create` or `restart` — no commit needed.
+- `.claudio.yml` — what this repo needs: ports, services, hooks, instance IDs.
+- `~/.claudio/config.yml` — what this machine allows: resource ceilings, port range, editor. Applies to every instance.
 
-If your repo already commits a `.claudio.yml`, Claudio still reads it from your folder and says so once: git keeps tracking a file it already tracks, so your local edits will show as changes until you run `git rm --cached .claudio.yml`. Claudio won't touch your git index for you.
+`.claudio.yml` lives in the folder you ran `claudio create .` from, and `create` prints its path. Claudio gitignores it for you. Edits take effect on the next `create` or `restart` — no commit needed.
 
-Don't confuse either with `.claudio` (no extension), which `claudio create .` also writes in your working directory. That one is neither config nor shared: it just records which instance IDs belong to that folder so commands can skip the ID. It's gitignored, and deleting it costs you nothing but the convenience.
+If your repo already commits a `.claudio.yml`, Claudio still reads it from your folder and says so once. Git keeps tracking a file it already tracks, so your edits show as changes until you run `git rm --cached .claudio.yml`.
 
 `.claudio.yml` (all fields optional):
 
@@ -325,7 +326,7 @@ Don't confuse either with `.claudio` (no extension), which `claudio create .` al
 image:
   base: node:22-slim       # default; override for a different toolchain base
   apt: [libpq-dev]         # extra apt packages baked into a per-repo image layer
-  npm_global: [pnpm]
+  npm_global: [typescript]   # pnpm and yarn already ship in the base image
   dockerfile: .claudio/Dockerfile   # escape hatch: replaces the generated Dockerfile entirely
 
 ports:
@@ -353,6 +354,9 @@ resources:
   memory: 10g               # this repo needs more than the machine default
   cpus: 6
   pids: 1024
+
+instances:                  # written by Claudio; lets commands here skip the ID
+  - brave-egret
 ```
 
 A repo declaring an `image:` section with `apt`/`npm_global`/`dockerfile` needs its own image layer, built on top of the shared base — build it explicitly:

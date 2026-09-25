@@ -289,6 +289,19 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 		}
 	}
 
+	// Same reasoning, for --memory/--cpus/--pids (ROD-137): `restart`
+	// has no resource flags and re-derives its limits from this file, so
+	// an override that isn't written here lasts exactly until the first
+	// restart. Written before provisioning so resolveResources below
+	// reads it back as the repo layer — the override and the file agree
+	// by construction rather than by two code paths computing the same
+	// number.
+	if params.ResourceOverride != nil {
+		if err := config.SetResourcesInRepoConfig(config.RepoConfigPath(sourceDirPtr, worktreeDir), *params.ResourceOverride); err != nil {
+			return CreateResult{}, coreerr.Wrap(coreerr.Internal, op+": record resources in .claudio.yml", err)
+		}
+	}
+
 	createdAt := time.Now().Unix()
 	if err := st.CreateInstance(ctx, store.NewInstanceParams{
 		ID:          id,
@@ -633,14 +646,25 @@ const PostStartLogPath = "/tmp/claudio-post-start.log"
 // the stream open even after setsid, which reintroduces the hang the
 // detaching was meant to avoid.
 //
-// The cost of detaching is that a post_start command has no meaningful
-// exit status at spawn time: a command that dies a second later still
-// looks like a successful spawn here. Only the failure to *launch* is
-// reported. That is why the log path is surfaced through progress —
-// it is the only place the real outcome shows up. Provisioning is
-// deliberately not failed by a post_start command's own exit: a dead
-// dev server should leave a usable instance the user can attach to and
-// debug, not an instance that refuses to exist.
+// Detaching means the command's own exit status is not available at
+// spawn time, so each launch is followed by a short liveness check
+// (postStartLivenessDelay) that distinguishes the two outcomes that
+// actually differ to a user: a process still running after the grace
+// period — a dev server, which is working — from one that has already
+// exited, which is the `pnpm: not found` case that used to be reported
+// identically to success (ROD-138). A command that dies later still
+// escapes this, which is inherent to detaching; the check buys the
+// common failure, which is immediate.
+//
+// A dead command is reported with the tail of its log rather than only
+// the path to it, because the path alone forced the user into a manual
+// `docker exec ... cat` to learn anything at all.
+//
+// Provisioning is still deliberately not failed by a post_start
+// command's own exit: a dead dev server should leave a usable instance
+// the user can attach to and debug, not an instance that refuses to
+// exist. The change here is that the failure is now *visible*, not that
+// it is fatal.
 //
 // A missing .claudio.yml or an empty post_start list is not an error.
 func runPostStart(ctx context.Context, dockerHost, containerID, repoRoot, worktreeDir, configPath string, progress ProgressFunc) error {
@@ -664,23 +688,129 @@ func runPostStart(ctx context.Context, dockerHost, containerID, repoRoot, worktr
 		return fmt.Errorf("post_start: prepare log: %w", err)
 	}
 
-	for _, cmd := range repoCfg.PostStart {
-		launch := fmt.Sprintf("setsid sh -c %s </dev/null >>%s 2>&1 &",
-			shellQuote(cmd), PostStartLogPath)
+	for i, cmd := range repoCfg.PostStart {
+		// The wrapper records the command's own exit status to a marker
+		// file when (and only when) it finishes. That file existing is
+		// what the liveness check below reads: present means the command
+		// has already exited and names the status, absent means it is
+		// still running.
+		//
+		// Deliberately not the spawned PID, which was tried first and is
+		// unreliable: a command that dies instantly frees its PID, and a
+		// busy container reuses it fast enough that `kill -0` reports a
+		// completely unrelated process as "still alive" — verified, a
+		// `this-command-does-not-exist` reliably read as healthy that way.
+		statusPath := fmt.Sprintf("%s.%d.status", PostStartLogPath, i)
+		launch := fmt.Sprintf("rm -f %s; setsid sh -c %s </dev/null >>%s 2>&1 & echo ok",
+			statusPath,
+			shellQuote(fmt.Sprintf("%s; echo $? > %s", cmd, statusPath)),
+			PostStartLogPath)
 		output, exitCode, err := engine.RunInContainer(ctx, dockerHost, containerID, containerWorkdir, launch)
 		if err != nil {
 			return fmt.Errorf("post_start %q: %w", cmd, err)
 		}
 		// A nonzero status here is the shell failing to *spawn* the
-		// command (the command's own later exit is invisible to us by
-		// design) — worth failing provisioning for, since it means
+		// command — worth failing provisioning for, since it means
 		// post_start was malformed rather than merely unsuccessful.
 		if exitCode != 0 {
 			return fmt.Errorf("post_start %q: launch failed with %d: %s", cmd, exitCode, output)
 		}
-		reportProgress(progress, store.StepContainerUp, fmt.Sprintf("post_start: launched %q (log: %s)", cmd, PostStartLogPath))
+
+		status, logTail := postStartLiveness(ctx, dockerHost, containerID, containerWorkdir, statusPath)
+		if status == "" {
+			reportProgress(progress, store.StepContainerUp, fmt.Sprintf("post_start: launched %q (log: %s)", cmd, PostStartLogPath))
+			continue
+		}
+		msg := fmt.Sprintf("post_start: %q exited with %s within %s — the instance is up but this command is not running (log: %s)",
+			cmd, status, postStartLivenessDelay, PostStartLogPath)
+		if logTail != "" {
+			msg += "\n" + indentLines(logTail, "    ")
+		}
+		reportProgress(progress, store.StepContainerUp, msg)
 	}
 	return nil
+}
+
+// postStartLivenessDelay is how long a post_start command is given to
+// still be running before it is reported as having died. Short enough
+// not to slow provisioning noticeably, long enough for the failure this
+// is aimed at: a command that cannot start at all (`pnpm: not found`,
+// a missing script, a syntax error) is gone well inside it, while a dev
+// server binding a port is not.
+//
+// This is a heuristic and is documented as one — it cannot catch a
+// server that dies after ten seconds. Catching the immediate case is
+// what turns the silent failure in ROD-138 into a visible one.
+const postStartLivenessDelay = 750 * time.Millisecond
+
+// postStartLiveness waits out the grace period and then reports whether
+// the command has already exited: status is its exit status when the
+// marker file says it finished, and empty when it is still running.
+// When it has died, the tail of the post_start log comes back with it so
+// the caller can show *why* rather than only that something went wrong.
+//
+// Every failure to determine the outcome is treated as still-running:
+// this is a diagnostic, and a probe that cannot answer must not invent a
+// failure for a command that may well be running fine. That covers the
+// exec itself failing (a container that has since stopped, a workdir
+// that no longer exists) as well as an unreadable marker. The log tail
+// is best-effort for the same reason — a missing log is reported as no
+// tail, not as an error that would mask the verdict.
+func postStartLiveness(ctx context.Context, dockerHost, containerID, workdir, statusPath string) (status, logTail string) {
+	select {
+	case <-ctx.Done():
+		return "", ""
+	case <-time.After(postStartLivenessDelay):
+	}
+
+	// The sentinel distinguishes "the command is still running" from
+	// "the probe never ran at all": `docker exec` returns nonzero for
+	// both a missing marker file and a failed exec, so the exit code
+	// alone cannot tell a healthy command from an unanswerable question.
+	out, _, err := engine.RunInContainer(ctx, dockerHost, containerID, workdir,
+		fmt.Sprintf("if [ -f %s ]; then printf '%%s ' %s; cat %s; else echo %s; fi",
+			statusPath, postStartExitedSentinel, statusPath, postStartRunningSentinel))
+	if err != nil || !strings.Contains(out, postStartExitedSentinel) {
+		return "", ""
+	}
+	status = strings.TrimSpace(strings.SplitN(out, postStartExitedSentinel, 2)[1])
+	if status == "" {
+		status = "an unknown status"
+	}
+
+	tail, _, err := engine.RunInContainer(ctx, dockerHost, containerID, workdir,
+		fmt.Sprintf("tail -n %d %s 2>/dev/null", postStartLogTailLines, PostStartLogPath))
+	if err != nil {
+		return status, ""
+	}
+	return status, strings.TrimRight(tail, "\n")
+}
+
+// postStartLogTailLines is how much of the log a dead command's report
+// carries inline. Enough for a stack trace's first frames or a "not
+// found" line with context, short enough not to bury the progress
+// stream in a verbose framework's startup banner — the full log is
+// still at PostStartLogPath.
+const postStartLogTailLines = 20
+
+// Sentinels the liveness probe prints to report its own verdict. Only a
+// probe that actually ran can emit either, which is what separates "the
+// command exited" from "the exec never happened" — see postStartLiveness.
+// Distinctive enough not to collide with a command's own output.
+const (
+	postStartExitedSentinel  = "claudio-post-start-exited"
+	postStartRunningSentinel = "claudio-post-start-running"
+)
+
+// indentLines prefixes every line of s, so a multi-line log tail reads
+// as one block belonging to the progress line above it rather than as
+// several unrelated messages.
+func indentLines(s, prefix string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 // shellQuote wraps s for safe use as a single POSIX shell word. Needed

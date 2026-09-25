@@ -135,6 +135,24 @@ type RepoConfig struct {
 	PostCreate   []string      `yaml:"post_create,omitempty"`
 	PostStart    []string      `yaml:"post_start,omitempty"`
 	Resources    Resources     `yaml:"resources,omitempty"`
+	// Instances ties this directory to the instances created from it
+	// (ROD-117), so `claudio attach` and friends can infer an id the user
+	// would otherwise copy out of `claudio ls` every time.
+	//
+	// It lives here rather than in a file of its own because one
+	// name is one place to look: a user who knows about .claudio.yml
+	// should not also have to learn that an extensionless sibling exists
+	// and means something else entirely.
+	//
+	// It is also why the whole file is machine-local and git-ignored
+	// (see the package doc): ids mean nothing in anyone else's store, so
+	// a file that carries them must never be committed.
+	//
+	// A list rather than a single id because multiple concurrent
+	// instances per repo is the architecture's design center, not an
+	// edge case — one worktree per session, so parallel streams of work
+	// mean parallel instances, and one directory routinely has several.
+	Instances []string `yaml:"instances,omitempty"`
 }
 
 // PortsConfig is the global port-allocation policy (ROD-98).

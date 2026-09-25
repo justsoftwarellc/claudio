@@ -208,7 +208,7 @@ func cmdCreate(ctx context.Context, args []string) int {
 	// here, git-initializing it first if needed — ROD-115. Remote forms
 	// pass through untouched. Done before the client call so a bad path
 	// fails immediately, without generating an instance ID first.
-	// A local source is also the directory the pointer file belongs in
+	// A local source is also the directory .claudio.yml belongs in
 	// (ROD-117): `claudio create .` ties the new instance to the folder
 	// the user is standing in, so later commands can infer its id.
 	var sourceDir string

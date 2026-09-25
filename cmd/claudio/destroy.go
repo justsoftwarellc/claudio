@@ -39,7 +39,7 @@ func cmdDestroy(ctx context.Context, args []string) int {
 		return 1
 	}
 
-	// Resolve to the canonical id before destroying: the pointer file
+	// Resolve to the canonical id before destroying: .claudio.yml
 	// lists ids, so a destroy by --name must still remove the right line.
 	instanceID := idOrName
 	if inst, err := c.GetInstance(ctx, idOrName); err == nil {
