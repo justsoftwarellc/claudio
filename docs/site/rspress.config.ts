@@ -21,8 +21,15 @@ const sidebar = {
   '/docs/': [
     { text: 'Home', link: '/docs/' },
     {
+      // No `link` on this group header. Rspress builds the footer's
+      // prev/next by flattening the sidebar (theme/logic/usePrevNextPage),
+      // pushing a linked group *and* its children into one list, then
+      // matching the current pathname with findIndex — first hit wins. A
+      // group linked to its own first child therefore lands twice in a
+      // row, and "next" on Getting Started resolved to Getting Started
+      // instead of Configuration. The group still expands on click, and
+      // the nav bar links the guide's entry page.
       text: 'Guide',
-      link: '/docs/guide/getting-started',
       items: [
         { text: 'Getting Started', link: '/docs/guide/getting-started' },
         { text: 'Configuration', link: '/docs/guide/configuration' },

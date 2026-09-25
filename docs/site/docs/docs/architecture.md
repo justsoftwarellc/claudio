@@ -173,12 +173,15 @@ claudio create <repo> [--branch B | --new-branch B] [--name N] [--env-file F] [-
 claudio ls [--all] [--json]
 claudio attach <id>
 claudio status <id>
-claudio logs <id> [--service X] [--follow]
+claudio logs <id> [--service X] [--post-start] [--follow]
                                          # single-container: streams its container's own
                                          # logs; compose instance: --service names one
                                          # sidecar (or the agent), omitted means every
-                                         # service interleaved. No daemon needed — execs
-                                         # straight into `docker logs`/`docker compose logs`.
+                                         # service interleaved. --post-start reads the
+                                         # post_start hook's own log, which is redirected
+                                         # to a file and so never reaches `docker logs`.
+                                         # No daemon needed — execs straight into
+                                         # `docker logs`/`docker compose logs`.
 claudio ports <id> [--add c] [--remove c]
 claudio stop|start|restart <id> [--fresh]
 claudio rebuild <id> [--fresh]           # rebuild the image, then recreate the container
@@ -509,10 +512,12 @@ image:
   apt:
     - libpq-dev
   npm_global:
-    - pnpm
+    - typescript
 ```
 
 The builder generates a Dockerfile from this. Adding Python, Go, or Rust later becomes a config change rather than a code change, and repos with unusual system dependencies do not need Claudio to ship an image for them.
+
+**Package managers ship in the base.** npm comes with Node; pnpm and yarn are enabled through corepack, with their binaries primed into a `COREPACK_HOME` under `/opt` at build time so a container with no network still resolves them. A repo pinning `packageManager` in `package.json` is honoured — corepack fetches that exact version on first use, which is why the cache is agent-writable rather than root-owned. Repos therefore do not declare a package manager under `npm_global`; that field is for tools the project itself needs (ROD-139).
 
 **UID/GID matching is a build arg, not a baked constant.** The image is built with `USER_UID`/`USER_GID` matched to the host user (here `501:20`, against Debian's default `1000:1000`) and cached per host — the same approach devcontainers take. Since `/workspace` is a bind mount, every file the agent creates carries the container's UID; OrbStack auto-maps ownership so a mismatch mostly works there, but it fails differently on Docker Desktop and native Linux. The failure this prevents is root-owned files appearing in the user's repo that need `sudo` to remove.
 
@@ -830,7 +835,7 @@ An instance created from a remote URL has no folder you stand in, so for those t
 image:
   base: node:22-slim          # default when omitted
   apt: [postgresql-client, libpq-dev]
-  npm_global: [pnpm]
+  npm_global: [typescript]    # pnpm/yarn already ship in the base
   dockerfile: .claudio/Dockerfile   # escape hatch; built FROM the resolved base
 
 ports:

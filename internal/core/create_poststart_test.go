@@ -285,3 +285,97 @@ func TestStartInstanceRerunsPostStart(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// setupPostStart creates an instance and writes a .claudio.yml holding
+// the given post_start body, returning what runPostStart needs. Shared
+// by the liveness tests below, which differ only in the command they
+// declare and what they expect reported.
+func setupPostStart(t *testing.T, body string) (containerID, repoRoot, worktreeDir, configPath string) {
+	t.Helper()
+	dockerAvailable(t)
+	s := openTestStore(t)
+	repoURL := newLocalOriginRepo(t)
+
+	result, err := createForTest(t, s, baseCreateParams(t, repoURL))
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", result.ContainerID).Run() })
+
+	if err := os.WriteFile(filepath.Join(result.WorktreeDir, ".claudio.yml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := s.GetInstance(t.Context(), result.InstanceID)
+	if err != nil {
+		t.Fatalf("GetInstance: %v", err)
+	}
+	return result.ContainerID, inst.RepoRoot, result.WorktreeDir, filepath.Join(result.WorktreeDir, config.FileName)
+}
+
+// The bug (ROD-138): a post_start command that dies immediately was
+// reported identically to one that is running, because only the
+// launching shell's exit status was ever checked. `pnpm: not found` —
+// the case that reached a user — is exactly this shape.
+func TestRunPostStartReportsCommandThatDiesImmediately(t *testing.T) {
+	containerID, repoRoot, worktreeDir, configPath := setupPostStart(t,
+		"post_start:\n  - this-command-does-not-exist\n")
+
+	var messages []string
+	err := runPostStart(t.Context(), "", containerID, repoRoot, worktreeDir, configPath, func(e ProgressEvent) {
+		messages = append(messages, e.Message)
+	})
+	// Still not fatal: a dead post_start must leave a usable instance.
+	if err != nil {
+		t.Fatalf("runPostStart should not fail provisioning for a dead command, got: %v", err)
+	}
+
+	joined := strings.Join(messages, "\n")
+	if strings.Contains(joined, "launched") && !strings.Contains(joined, "exited") {
+		t.Errorf("a dead command was reported as a successful launch:\n%s", joined)
+	}
+	if !strings.Contains(joined, "exited") {
+		t.Errorf("no report that the command exited:\n%s", joined)
+	}
+	// The whole point of the fix: say *why*, not just that something is
+	// wrong, so the user need not hand-type a docker exec to find out.
+	if !strings.Contains(joined, "not found") {
+		t.Errorf("report carries no log tail explaining the failure:\n%s", joined)
+	}
+}
+
+// The counterpart that must not regress: a long-running command (the
+// dev server post_start exists for) is still reported as launched, and
+// the liveness check must not kill it or call it dead.
+func TestRunPostStartReportsLongRunningCommandAsLaunched(t *testing.T) {
+	// A sleep with a duration nothing else in the container uses, so the
+	// pgrep below can only match the process post_start itself spawned —
+	// createForTest runs the container's own command as `sleep 60`.
+	const marker = "sleep 987"
+	containerID, repoRoot, worktreeDir, configPath := setupPostStart(t,
+		"post_start:\n  - "+marker+"\n")
+
+	var messages []string
+	if err := runPostStart(t.Context(), "", containerID, repoRoot, worktreeDir, configPath, func(e ProgressEvent) {
+		messages = append(messages, e.Message)
+	}); err != nil {
+		t.Fatalf("runPostStart: %v", err)
+	}
+
+	joined := strings.Join(messages, "\n")
+	if !strings.Contains(joined, "launched") {
+		t.Errorf("a still-running command was not reported as launched:\n%s", joined)
+	}
+	if strings.Contains(joined, "exited") {
+		t.Errorf("a still-running command was reported as dead:\n%s", joined)
+	}
+
+	// Still actually running after the check — the probe uses kill -0,
+	// which must not signal the process it is asking about.
+	out, _, err := engine.RunInContainer(t.Context(), "", containerID, "/", "pgrep -f 'sleep 987' >/dev/null && echo alive")
+	if err != nil {
+		t.Fatalf("RunInContainer: %v", err)
+	}
+	if !strings.Contains(out, "alive") {
+		t.Errorf("liveness probe killed the command it was checking; pgrep output = %q", out)
+	}
+}

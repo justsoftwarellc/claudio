@@ -85,9 +85,10 @@ Usage:
                                    provision a new sandboxed session
   claudio ls [--all]              list instances (--all includes stopped ones)
   claudio attach [<id>]           attach to an instance's Claude Code session
-  claudio logs [<id>] [--service X] [--follow]
+  claudio logs [<id>] [--service X] [--post-start] [--follow]
                                    stream a container's logs (compose instances:
-                                   --service names one sidecar, or every service)
+                                   --service names one sidecar, or every service;
+                                   --post-start reads the post_start hook's log)
   claudio cd [<id>]               print an instance's workspace path
   claudio open [<id>]             open an instance's workspace in the configured
                                    editor (set it with: claudio config set editor)
@@ -115,10 +116,10 @@ Usage:
   claudio image build [--repo <path>]
                                    build claudio/base:latest (and a repo-specific
                                    layer, if --repo's .claudio.yml asks for one)
-  claudio daemon status           report daemon status (phase 1: no daemon yet — see ROD-95)
+  claudio daemon status           report daemon status (no daemon yet)
   claudio help                    show this message
 
-An omitted <id> is read from the nearest .claudio file — written by
+An omitted <id> is read from the nearest .claudio.yml — written by
 "claudio create ." or "claudio link" — so commands run from that
 directory need no id. If the directory has several instances, pass
 one explicitly.`)

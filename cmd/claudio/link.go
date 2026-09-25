@@ -12,8 +12,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/rodrigomorales/claudio/internal/config"
 	"github.com/rodrigomorales/claudio/internal/core"
-	"github.com/rodrigomorales/claudio/internal/instancefile"
 	"github.com/rodrigomorales/claudio/internal/store"
 )
 
@@ -22,8 +22,8 @@ import (
 const choiceCanceled = -1
 
 // cmdLink implements `claudio link [<id>]` (ROD-120): ties an existing
-// instance to the current directory by writing the same `.claudio` file
-// `claudio create .` does, so bare `claudio attach` and friends can infer
+// instance to the current directory by recording it in the same `.claudio.yml`
+// `claudio create .` writes to, so bare `claudio attach` and friends can infer
 // its id (ROD-117).
 //
 // This exists because create is not the only way an instance comes to
@@ -76,7 +76,7 @@ func cmdLink(ctx context.Context, args []string) int {
 }
 
 // cmdUnlink implements `claudio unlink [<id>]`: drops an instance from
-// this directory's `.claudio` without stopping, destroying, or otherwise
+// this directory's `.claudio.yml` without stopping, destroying, or otherwise
 // touching the instance itself.
 //
 // The counterpart to link, and the supported way to clear the stale
@@ -94,14 +94,14 @@ func cmdUnlink(ctx context.Context, args []string) int {
 		return 1
 	}
 
-	dir, ids, err := instancefile.Find(cwd)
+	dir, ids, err := config.FindInstances(cwd)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio unlink:", describeErr(err))
 		return 1
 	}
 	if dir == "" || len(ids) == 0 {
-		fmt.Fprintf(os.Stderr, "claudio unlink: no %s file in this directory or any parent — nothing to unlink.\n",
-			instancefile.FileName)
+		fmt.Fprintf(os.Stderr, "claudio unlink: no %s listing instances in this directory or any parent — nothing to unlink.\n",
+			config.FileName)
 		return 1
 	}
 
@@ -132,8 +132,8 @@ func cmdUnlink(ctx context.Context, args []string) int {
 	return 0
 }
 
-// linkInstance records inst in dir's pointer file and returns the message
-// to print. Idempotent, mirroring instancefile.Append: linking twice says
+// linkInstance records inst in dir's .claudio.yml and returns the message
+// to print. Idempotent, mirroring config.AppendInstance: linking twice says
 // so rather than reporting a second successful link.
 //
 // A repo that doesn't correspond to dir is reported but not refused — the
@@ -141,7 +141,7 @@ func cmdUnlink(ctx context.Context, args []string) int {
 // not an authority on what the user meant, and a link costs one `claudio
 // unlink` to undo.
 func linkInstance(dir string, inst store.Instance) (string, error) {
-	existing, _, err := instancefile.Load(dir)
+	existing, _, err := config.LoadInstances(dir)
 	if err != nil {
 		return "", err
 	}
@@ -151,7 +151,7 @@ func linkInstance(dir string, inst store.Instance) (string, error) {
 		}
 	}
 
-	if err := instancefile.Append(dir, inst.ID); err != nil {
+	if err := config.AppendInstance(dir, inst.ID); err != nil {
 		return "", err
 	}
 
@@ -173,12 +173,12 @@ func linkInstance(dir string, inst store.Instance) (string, error) {
 	return b.String(), nil
 }
 
-// unlinkInstance removes id from dir's pointer file. Unlike
-// instancefile.Remove, an id that was never linked is an error here: the
+// unlinkInstance removes id from dir's .claudio.yml. Unlike
+// config.RemoveInstance, an id that was never linked is an error here: the
 // user named something specific and nothing happened, which they should
 // hear about rather than see reported as success.
 func unlinkInstance(dir, id string) (string, error) {
-	ids, _, err := instancefile.Load(dir)
+	ids, _, err := config.LoadInstances(dir)
 	if err != nil {
 		return "", err
 	}
@@ -194,13 +194,13 @@ func unlinkInstance(dir, id string) (string, error) {
 		return "", fmt.Errorf("%s is not linked to %s (linked: %s)", id, dir, strings.Join(ids, ", "))
 	}
 
-	if err := instancefile.Remove(dir, id); err != nil {
+	if err := config.RemoveInstance(dir, id); err != nil {
 		return "", err
 	}
 
 	if len(ids) == 1 {
-		return fmt.Sprintf("Unlinked %s; removed %s.\nThe instance itself is untouched — see `claudio ls`.\n",
-			id, filepath.Join(dir, instancefile.FileName)), nil
+		return fmt.Sprintf("Unlinked %s; %s no longer lists any instances.\nThe instance itself is untouched — see `claudio ls`.\n",
+			id, filepath.Join(dir, config.FileName)), nil
 	}
 	return fmt.Sprintf("Unlinked %s from %s.\nThe instance itself is untouched — see `claudio ls`.\n", id, dir), nil
 }
@@ -251,7 +251,7 @@ func pickInstance(ctx context.Context, c interface {
 	return ordered[idx].Instance, true
 }
 
-// pickLinkedID prompts for one of the ids already in the pointer file.
+// pickLinkedID prompts for one of the ids already listed in .claudio.yml.
 func pickLinkedID(dir string, ids []string, caller string) (string, bool) {
 	var b strings.Builder
 	for i, id := range ids {
