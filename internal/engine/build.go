@@ -123,9 +123,17 @@ func BuildImage(ctx context.Context, host string, spec BuildSpec) error {
 // tarBuildContext packages files into an uncompressed tar stream, the
 // format Docker's build API accepts as a build context. Uncompressed
 // (not tar.gz) because everything here is already small (a Dockerfile
-// plus at most one escape-hatch file) and BuildKit re-reads it locally,
-// not over a slow network link — gzip would only cost CPU for no
-// measurable transfer win at this size.
+// plus a template and at most one escape-hatch file) and the daemon
+// reads it over a local socket, not a slow network link — gzip would
+// only cost CPU for no measurable transfer win at this size.
+//
+// Note that ImageBuild above sets no BuilderVersion, so the daemon uses
+// its *legacy* builder, not BuildKit. That is a real constraint on what
+// the Dockerfiles here may use: BuildKit-only syntax silently
+// misbuilds rather than erroring. A `RUN cat <<'JSON'` heredoc writing
+// the onboarding template produced an empty file this way while
+// `docker build` on the same machine produced a correct one (ROD-140),
+// which is why that template is now a COPYed build-context file.
 func tarBuildContext(files []BuildFile) (io.Reader, error) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)

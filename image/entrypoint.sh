@@ -9,11 +9,11 @@ set -euo pipefail
 
 SESSION=claude
 
-# Apply the onboarding pre-seed only if this home/ doesn't already have
-# its own .claude.json — see Dockerfile for why this moved out of the
-# image build. A fresh home/ (first `claudio create` for this instance)
-# gets the template; a home/ from a rebuilt container (ROD-99 restart)
-# keeps its real state, including whatever session history and settings
+# Apply the onboarding pre-seed whenever this home/ lacks a *usable*
+# .claude.json — see Dockerfile for why this moved out of the image
+# build. A fresh home/ (first `claudio create` for this instance) gets
+# the template; a home/ from a rebuilt container (ROD-99 restart) keeps
+# its real state, including whatever session history and settings
 # already accumulated there.
 #
 # The trust-dialog entry is keyed by the exact cwd string, and (ROD-114)
@@ -21,8 +21,97 @@ SESSION=claude
 # /workspace — so it cannot be baked into the template at image-build
 # time. sed the real $PWD in at container start instead; the template
 # ships with a placeholder for exactly this substitution.
-if [ ! -f "$HOME/.claude.json" ] && [ -f /opt/claudio/claude.json.template ]; then
-	sed "s#__CLAUDIO_WORKDIR__#$PWD#" /opt/claudio/claude.json.template > "$HOME/.claude.json"
+#
+# The guard tests *content*, not mere presence, because presence alone
+# let the attach trap come back (ROD-140). Observed on a real instance:
+# ~/.claude.json was truncated to 0 bytes (the container stopped while
+# Claude Code was writing it), so Claude Code backed it up as
+# .claude/backups/.claude.json.corrupted.<ms> and wrote itself a fresh
+# minimal config — one carrying neither hasCompletedOnboarding nor a
+# trust entry for the cwd. A `[ ! -f ]` guard sees that file and skips,
+# so the pre-seed was never re-applied and every launch landed in the
+# first-run flow (theme picker, then login).
+#
+# That is what resurrects the ROD-116 symptom rather than any regression
+# in the pane command: Ctrl-C at an onboarding prompt is not a session
+# quit, so `claude` exits *nonzero*, the pane falls through to `bash -l`
+# (the user is "left in the container"), and leaving that shell loops
+# round to another onboarding prompt. The pane's `claude && break` is
+# correct and still verified — a real double-Ctrl-C quit of a working
+# TUI exits 0 and does end the session.
+#
+# So the keys that gate startup are merged in on every boot, not just
+# when the file is absent, and everything else in the file is preserved
+# verbatim. node is the image's own runtime (Claude Code needs it), so
+# this costs no extra dependency, and it is the only way to edit JSON
+# without risking the truncation that caused the bug in the first place:
+# the merge writes a temp file and renames it over the original, which
+# is atomic, so an interrupted boot can no longer leave a 0-byte config.
+if [ -f /opt/claudio/claude.json.template ]; then
+	CLAUDIO_WORKDIR="$PWD" node -e '
+		const fs = require("fs");
+		const path = process.env.HOME + "/.claude.json";
+		const workdir = process.env.CLAUDIO_WORKDIR;
+
+		// The template supplies the baseline; reading it here keeps the
+		// one definition of "what Claude Code needs to start" in the
+		// image, matching core.configBaseline on the host side.
+		//
+		// A template that is empty or unparseable is a packaging fault,
+		// not a user state, and it is the exact shape of the second
+		// ROD-140 cause (a BuildKit-only heredoc that built a 0-byte
+		// file under the legacy builder). Say so rather than dying with
+		// a bare SyntaxError, since the visible symptom is otherwise
+		// just Claude Code opening its first-run flow.
+		const raw = fs.readFileSync("/opt/claudio/claude.json.template", "utf8");
+		if (raw.trim() === "") {
+			console.error("entrypoint: /opt/claudio/claude.json.template is empty; the image was built wrong.");
+			process.exit(1);
+		}
+		const tmpl = JSON.parse(raw.replaceAll("__CLAUDIO_WORKDIR__", workdir));
+
+		// An unreadable or unparseable file is treated as absent, which
+		// is how Claude Code itself treats it — that includes the
+		// 0-byte case that produced this bug.
+		let cfg = {};
+		try { cfg = JSON.parse(fs.readFileSync(path, "utf8")) || {}; } catch {}
+		if (typeof cfg !== "object" || Array.isArray(cfg)) cfg = {};
+
+		// Merge, not overwrite: only the gating keys are asserted, so
+		// accumulated state (MCP servers, history, other projects)
+		// survives a restart. projects is merged per-key for the same
+		// reason — replacing the map would drop every other path the
+		// user has already trusted.
+		const before = JSON.stringify(cfg);
+		for (const [k, v] of Object.entries(tmpl)) {
+			// theme is a real user preference once onboarding is done,
+			// so the template only fills it in when the file has none —
+			// asserting it would undo `/theme` on every restart. The
+			// startup gates (hasCompletedOnboarding, the trust entry)
+			// are asserted unconditionally, since a stale `false` is
+			// exactly the state this repairs.
+			if (k === "projects") continue;
+			if (k === "theme" && cfg.theme !== undefined) continue;
+			cfg[k] = v;
+		}
+		// Per-project merge, one level deeper than Object.assign would
+		// go: the template entry for this cwd carries only
+		// hasTrustDialogAccepted, so assigning it wholesale would drop
+		// the accumulated keys of that project (its history, its
+		// allowedTools). Verified — a worktree entry with history lost
+		// it under the shallower merge.
+		cfg.projects = Object.assign({}, cfg.projects);
+		for (const [k, v] of Object.entries(tmpl.projects || {})) {
+			cfg.projects[k] = Object.assign({}, cfg.projects[k], v);
+		}
+
+		if (JSON.stringify(cfg) === before) process.exit(0);
+		// Atomic replace, so an interrupted write cannot truncate the
+		// config the way the original failure did.
+		const tmp = path + ".claudio-tmp";
+		fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
+		fs.renameSync(tmp, path);
+	' || echo "entrypoint: could not pre-seed ~/.claude.json; Claude Code may show its first-run prompts." >&2
 fi
 
 # Tell the agent how to make a dev server reachable from the host.
@@ -97,6 +186,14 @@ fi
 # failed: Operation not permitted"), not as the agent user and not as
 # root, because Docker's default seccomp profile blocks it.
 #
+# Edit( alone, with no Write( companion: Claude Code rejects a Write
+# rule here at startup — "Write(//repo/**/.claudio.yml) is not matched by
+# file permission checks — only Edit(path) rules are. Use
+# Edit(//repo/**/.claudio.yml) instead (Edit rules cover all file-editing
+# tools)" — printed on every launch, above the TUI. Edit( already covers
+# Write and the other file-editing tools, so the second rule bought
+# nothing and cost a warning on every attach.
+#
 # This is advisory-grade: it stops the agent's own tools, not a
 # determined `sh -c`. The container boundary, not this file, is the real
 # isolation.
@@ -109,8 +206,7 @@ if [ ! -f "$HOME/.claude/settings.json" ]; then
 {
   "permissions": {
     "deny": [
-      "Edit(//repo/**/.claudio.yml)",
-      "Write(//repo/**/.claudio.yml)"
+      "Edit(//repo/**/.claudio.yml)"
     ]
   }
 }

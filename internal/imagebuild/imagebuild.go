@@ -65,6 +65,7 @@ func buildBaseTagged(ctx context.Context, host, tag string, buildArgs map[string
 		Files: []engine.BuildFile{
 			{Name: baseDockerfileName, Contents: image.Dockerfile},
 			{Name: "entrypoint.sh", Contents: image.Entrypoint},
+			{Name: "claude.json.template", Contents: image.ClaudeJSONTemplate},
 		},
 		Dockerfile: baseDockerfileName,
 		Tags:       []string{tag},

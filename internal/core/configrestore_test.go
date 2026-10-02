@@ -367,27 +367,26 @@ func TestRestoreConfigRejectsUnderivableWorkdir(t *testing.T) {
 // is only safe while the two agree — this asserts they do, and fails
 // the moment the template changes without this file following.
 func TestConfigBaselineMatchesTheImageTemplate(t *testing.T) {
-	dockerfile, err := os.ReadFile("../../image/Dockerfile")
+	// The template is a real file in the build context, COPYed by the
+	// Dockerfile — it used to be a `RUN cat <<'JSON'` heredoc, which
+	// built empty under the legacy builder the SDK path selects
+	// (ROD-140; see image/Dockerfile). Reading the file directly also
+	// means this check can no longer be skipped by a change of form.
+	raw, err := os.ReadFile("../../image/claude.json.template")
 	if err != nil {
-		t.Fatalf("read Dockerfile: %v", err)
+		t.Fatalf("read image/claude.json.template: %v", err)
 	}
 
 	const placeholder = "__CLAUDIO_WORKDIR__"
-	body := string(dockerfile)
-	start := strings.Index(body, "cat > /opt/claudio/claude.json.template <<'JSON'")
-	if start == -1 {
-		t.Skip("the Dockerfile no longer writes claude.json.template with a heredoc; update this test alongside that change")
-	}
-	body = body[start:]
-	body = body[strings.Index(body, "\n")+1:]
-	end := strings.Index(body, "\nJSON")
-	if end == -1 {
-		t.Fatal("unterminated claude.json.template heredoc in image/Dockerfile")
-	}
-
 	var template map[string]any
-	if err := json.Unmarshal([]byte(body[:end]), &template); err != nil {
-		t.Fatalf("the Dockerfile's claude.json.template is not valid JSON: %v", err)
+	if err := json.Unmarshal(raw, &template); err != nil {
+		t.Fatalf("image/claude.json.template is not valid JSON: %v", err)
+	}
+	// An empty or placeholder-less template is the ROD-140 failure
+	// itself, not a drift: it would leave the entrypoint with no
+	// onboarding pre-seed to merge.
+	if !strings.Contains(string(raw), placeholder) {
+		t.Errorf("template has no %s placeholder, so the trust entry cannot be keyed to the container cwd:\n%s", placeholder, raw)
 	}
 
 	baseline := configBaseline(placeholder)

@@ -509,6 +509,18 @@ The original bug was the unguarded version of this: with a bare shell as the pan
 
 Two alternatives were tried and rejected. `remain-on-exit on` keeps the session but leaves a *dead* pane, stranding a user who quits while attached on "Pane is dead" with no way to type — worse than the bug it fixed. An unconditional `while true; do claude || bash -l; done` relaunches Claude Code the instant it is quit, so there is no way out of the session at all.
 
+The loop's correctness depends on something outside the loop: `claude` must actually reach a *session*. That coupling is what let the symptom come back (ROD-140) without the pane command changing at all.
+
+If `~/.claude.json` is missing the fields that clear the first-run flow — `hasCompletedOnboarding`, and `projects["<cwd>"].hasTrustDialogAccepted` — then `claude` opens onboarding (theme picker, then a login method) instead of a session. Observed on a real instance: the file had been truncated to 0 bytes when the container stopped mid-write, so Claude Code backed it up under `~/.claude/backups/.claude.json.corrupted.<ms>` and wrote itself a fresh *minimal* config carrying neither field. The entrypoint's pre-seed was guarded on `[ ! -f ]`, so a file being present was enough to skip it, and the pre-seed was never re-applied: every subsequent attach landed in onboarding, reading exactly like the ROD-116 trap it was mistaken for.
+
+So the entrypoint's pre-seed now tests *content*, not presence, and merges the gating keys on every boot rather than only when the file is absent — preserving everything else in it (accumulated MCP servers, history, other trusted paths, and a `theme` the user has since chosen). The merge writes a temp file and renames it over the original, so an interrupted boot can no longer produce the 0-byte file that started this. `claudio config restore` repairs the same damage on demand from the host, for an instance whose config is broken badly enough that there is nothing to attach to.
+
+Worth recording precisely, because it was measured rather than assumed: a deliberate quit exits 0 from *every* state tested — a working TUI (double Ctrl-C and `/exit` alike), the theme picker, and the login-method screen. The exit-status contract the loop rests on is intact; it was the config that broke, not the quit.
+
+There was a second, independent way to arrive at the same unstartable config, found while testing the first: the pre-seed template itself built **empty**. It was written by a `RUN cat > ... <<'JSON'` heredoc, and heredocs in a Dockerfile are a BuildKit feature — but `claudio image build` goes through the Docker Go SDK's `ImageBuild`, which selects the daemon's *legacy* builder unless told otherwise, and there the `<<'JSON'` is handed to `cat` as a literal argument. Measured both ways on one machine: `docker build` produced a 149-byte template, Claudio's own build path a 0-byte one. So anyone whose image came from `claudio image build` had no pre-seed at all, and a brand-new instance went straight to the theme picker.
+
+The template is therefore a real file in the build context (`image/claude.json.template`), COPYed rather than heredoc'd — a COPY behaves identically on both builders. The general constraint is worth remembering: while the SDK path sets no `BuilderVersion`, BuildKit-only Dockerfile syntax *silently misbuilds* here rather than failing, and that includes any escape-hatch Dockerfile a repo supplies.
+
 ### 7.3 Fast provisioning
 
 Cloning a large monorepo per instance is slow. Mitigations:

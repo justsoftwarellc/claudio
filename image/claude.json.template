@@ -1,0 +1,9 @@
+{
+  "theme": "dark",
+  "hasCompletedOnboarding": true,
+  "projects": {
+    "__CLAUDIO_WORKDIR__": {
+      "hasTrustDialogAccepted": true
+    }
+  }
+}

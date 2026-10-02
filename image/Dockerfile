@@ -141,17 +141,19 @@ RUN printf 'export PATH=/opt/claude-code/bin:$PATH\nexport COREPACK_HOME=/opt/co
 # security regression for Claudio specifically, because the operator (not
 # an untrusted third party) is the one who chose to mount that repo into
 # a sandbox they provisioned in the first place.
-RUN mkdir -p /opt/claudio && cat > /opt/claudio/claude.json.template <<'JSON'
-{
-  "theme": "dark",
-  "hasCompletedOnboarding": true,
-  "projects": {
-    "__CLAUDIO_WORKDIR__": {
-      "hasTrustDialogAccepted": true
-    }
-  }
-}
-JSON
+#
+# COPYed from the build context rather than written by a `RUN cat <<'JSON'`
+# heredoc, which produced an EMPTY template whenever the image was built
+# through Claudio itself. Heredocs in a Dockerfile are a BuildKit
+# feature; `claudio image build` goes through the Docker Go SDK's
+# ImageBuild, which selects the *legacy* builder unless asked otherwise,
+# and there `<<'JSON'` is handed to `cat` as a literal argument. Verified
+# both ways on this machine: `docker build` (BuildKit) yielded a
+# 149-byte template, the SDK path 0 bytes — and a 0-byte template means
+# the entrypoint has no onboarding pre-seed to apply, so every attach
+# lands in Claude Code's first-run flow (ROD-140). A COPY behaves
+# identically on both builders.
+COPY claude.json.template /opt/claudio/claude.json.template
 RUN chmod a+r /opt/claudio/claude.json.template
 
 # entrypoint.sh lives under /opt, not /home/agent (ROD-114) — found the

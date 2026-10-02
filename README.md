@@ -422,6 +422,8 @@ If claudio's state database is lost, rebuilt from a backup, or a container is cr
 
 The restore rebuilds the file host-side, through the bind-mounted `home/` — it never needs the broken session to come up, and works on a stopped instance. It prefers Claude Code's own timestamped backups under `~/.claude/backups/`, so what comes back is the real config from minutes earlier rather than a bare template; failing that it falls back to the same defaults the image pre-seeds. The broken file is renamed aside to `.claude.json.broken-<timestamp>`, never deleted.
 
+**`Ctrl-C` leaves you at a container shell, and leaving that shell starts Claude Code over again** — the loop reads like being trapped in the instance. The cause is almost always the config above rather than the session machinery: if `~/.claude.json` has lost `hasCompletedOnboarding` or the trust entry for the worktree, `claude` opens its *first-run* flow (theme picker, then a login method) instead of a session, and `Ctrl-C` at a setup prompt isn't a session quit. Claude Code also writes itself a fresh minimal config after finding the old one corrupt, which is one way to arrive here with a file that looks perfectly valid. `claudio config restore <id>` then `claudio restart <id>` fixes it; `claudio rebuild <id>` is the one to use if the image predates this fix, since the pre-seed lives in the entrypoint.
+
 **"no such instance"** — the ID or name doesn't match anything claudio knows about. `claudio ls --all` to see everything, including stopped instances (a destroyed instance is gone for good, not just hidden).
 
 ## License

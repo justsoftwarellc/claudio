@@ -17,3 +17,12 @@ var Dockerfile []byte
 
 //go:embed entrypoint.sh
 var Entrypoint []byte
+
+// ClaudeJSONTemplate is the onboarding pre-seed the entrypoint merges
+// into ~/.claude.json at boot. A real file COPYed from the build
+// context, not a Dockerfile heredoc: heredocs are BuildKit-only, and
+// the SDK build path this package uses selects the legacy builder, where
+// one yields an empty file (see image/Dockerfile for the measurements).
+//
+//go:embed claude.json.template
+var ClaudeJSONTemplate []byte
