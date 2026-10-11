@@ -240,6 +240,31 @@ if [ -n "${GH_TOKEN:-}" ]; then
 	gh auth setup-git >/dev/null 2>&1 || echo "entrypoint: gh auth setup-git failed; git push/fetch may be unauthenticated." >&2
 fi
 
+# Seed git identity from the host (cmd/claudio/env.go's gitIdentityEnv,
+# ROD-108 stopgap). GH_TOKEN above authenticates `git push`, but a
+# commit still fails without a configured author — the image carries no
+# .gitconfig, so an agent's first `git commit` hits "Please tell me who
+# you are" and bails. Pipe the operator's own `git config --global
+# user.name`/`user.email` through so commits land as them, matching
+# what the same push would be attributed to on github.com.
+#
+# Only when user.email is unset — the same "write when absent" pattern
+# as CLAUDE.md and settings.json above. home/ is bind-mounted and
+# persistent (ROD-99), so once the agent (or the user) edits the
+# container's own identity it survives rebuilds and should win over the
+# host's; re-asserting on every boot would overwrite that silently.
+#
+# A host with no configured identity (CLAUDIO_GIT_EMAIL unset) is left
+# alone: it's valid state for a fresh dev machine and gitIdentityEnv
+# won't inject anything. The agent can still `git config --global` it
+# inside the container.
+if [ -n "${CLAUDIO_GIT_EMAIL:-}" ] && ! git config --global --get user.email >/dev/null 2>&1; then
+	git config --global user.email "$CLAUDIO_GIT_EMAIL"
+	if [ -n "${CLAUDIO_GIT_NAME:-}" ]; then
+		git config --global user.name "$CLAUDIO_GIT_NAME"
+	fi
+fi
+
 # Start a detached tmux session so it exists before anyone attaches, and
 # survives this script's own exit (tini keeps the tmux server process
 # alive as long as it has a client or a session — the container's
