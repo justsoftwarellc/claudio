@@ -88,7 +88,15 @@ func cmdRebuild(ctx context.Context, args []string) int {
 	// and Start alone rejects anything that isn't already stopped.
 	// Restart re-provisions the container, which is what picks up the
 	// image just built.
-	result, err := c.Restart(ctx, idOrName, fresh, env, terminalProgress())
+	//
+	// runPostCreate=true: rebuild discards the old container outright,
+	// so anything post_create installed into its writable layer (e.g.
+	// npm ci's node_modules) is gone from the new one. Unlike a plain
+	// restart, which keeps post_create create-only because nothing about
+	// the container changed, rebuild needs post_create to run again
+	// against the fresh image/container so post_start has something to
+	// run against.
+	result, err := c.Restart(ctx, idOrName, fresh, true, env, terminalProgress())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio rebuild:", describeErr(err))
 		return 1

@@ -377,10 +377,17 @@ func createInstanceWithCmd(ctx context.Context, st CreateStore, params CreatePar
 // resolution or risk drifting on it.
 //
 // runPostCreateHook gates docs/architecture.md §5.1's post_create
-// commands to the original create only: the doc says they "run once,"
-// so StartInstance/RestartInstance pass false to skip re-running them on
-// every container recreation (which for something like "npm ci" would
-// be wasteful, and contradicts "once" even if usually idempotent).
+// commands to cases where the container is actually new: the doc says
+// they "run once," so a plain StartInstance/RestartInstance passes false
+// to skip re-running them against a container recreation that changed
+// nothing about what was already installed (which for something like
+// "npm ci" would be wasteful, and contradicts "once" even if usually
+// idempotent). `claudio rebuild` is the one caller that passes true
+// through RestartInstance: it discards the old container (and the new
+// image may differ from the old one too), so whatever post_create
+// installed into that container's writable layer is gone, and "once"
+// has to mean "once per container" rather than "once ever" for rebuild
+// to leave a working instance behind.
 func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRoot, worktreeDir string, createdAt int64, params CreateParams, cmd []string, runPostCreateHook bool, progress ProgressFunc) (containerID string, ports []resolvedPort, err error) {
 	if err := st.TransitionProvisionStep(ctx, id, store.StepRepoReady); err != nil {
 		return "", nil, failAndReturn(ctx, st, id, err)
@@ -554,6 +561,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 	reportProgress(progress, store.StepContainerUp, fmt.Sprintf("container %s started", shortContainerID(containerID)))
 
 	if runPostCreateHook {
+		reportProgress(progress, store.StepContainerUp, "running post_create")
 		if err := runPostCreate(ctx, params.DockerHost, containerID, repoRoot, worktreeDir, configPath); err != nil {
 			return "", nil, failAndReturn(ctx, st, id, err)
 		}

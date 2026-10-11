@@ -77,7 +77,13 @@ type Client interface {
 	Start(ctx context.Context, idOrName string, fresh bool, env map[string]string, progress core.ProgressFunc) (core.CreateResult, error)
 
 	// Restart is Stop followed by Start as one operation (ROD-100).
-	Restart(ctx context.Context, idOrName string, fresh bool, env map[string]string, progress core.ProgressFunc) (core.CreateResult, error)
+	// runPostCreate re-runs .claudio.yml's post_create commands against
+	// the new container instead of skipping them — false for `claudio
+	// restart` (post_create stays create-only per
+	// docs/architecture.md §5.1), true for `claudio rebuild`, whose
+	// fresh image/container has none of what post_create last installed
+	// in the old container's now-discarded writable layer.
+	Restart(ctx context.Context, idOrName string, fresh, runPostCreate bool, env map[string]string, progress core.ProgressFunc) (core.CreateResult, error)
 
 	// AddPort reserves a new host port for an existing instance and
 	// declares it in the worktree's .claudio.yml, which is what a Restart

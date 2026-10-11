@@ -41,19 +41,28 @@ type StartStore interface {
 // Claude Code session, since transcripts and settings persist in home/
 // across a container rebuild (verified working in an earlier session).
 //
+// runPostCreate, when true, re-runs .claudio.yml's post_create commands
+// against the new container. False for every ordinary start/restart,
+// matching docs/architecture.md §5.1's "run once, at create only" —
+// true only for `claudio rebuild` (see RestartInstance's rebuild
+// parameter), because rebuild discards the old container outright and a
+// fresh image/container has none of whatever post_create last installed
+// in that container's now-gone writable layer (e.g. `npm ci`'s
+// node_modules) for post_start to depend on.
+//
 // progress is CreateInstance's same caller-supplied sink
 // (docs/architecture.md §12.4) — a start/restart re-runs the same
 // clone-through-container-start work a create does, so it deserves the
 // same visibility. May be nil.
-func StartInstance(ctx context.Context, st StartStore, params CreateParams, idOrName string, fresh bool, progress ProgressFunc) (CreateResult, error) {
-	return startInstanceWithCmd(ctx, st, params, idOrName, fresh, nil, progress)
+func StartInstance(ctx context.Context, st StartStore, params CreateParams, idOrName string, fresh, runPostCreate bool, progress ProgressFunc) (CreateResult, error) {
+	return startInstanceWithCmd(ctx, st, params, idOrName, fresh, runPostCreate, nil, progress)
 }
 
 // startInstanceWithCmd is StartInstance's real implementation, taking the
 // same test-only engine.CreateSpec.Cmd override as createInstanceWithCmd
 // — see that function's doc for why. Production callers always go
 // through StartInstance.
-func startInstanceWithCmd(ctx context.Context, st StartStore, params CreateParams, idOrName string, fresh bool, cmd []string, progress ProgressFunc) (CreateResult, error) {
+func startInstanceWithCmd(ctx context.Context, st StartStore, params CreateParams, idOrName string, fresh, runPostCreate bool, cmd []string, progress ProgressFunc) (CreateResult, error) {
 	inst, err := st.GetInstance(ctx, idOrName)
 	if err != nil {
 		return CreateResult{}, wrapGetInstance("core: start", idOrName, err)
@@ -77,7 +86,7 @@ func startInstanceWithCmd(ctx context.Context, st StartStore, params CreateParam
 		return CreateResult{}, coreerr.Wrap(coreerr.Internal, op, err)
 	}
 
-	containerID, ports, err := provisionContainer(ctx, st, inst.ID, inst.RepoURL, inst.RepoRoot, inst.WorktreeDir, inst.CreatedAt, params, cmd, false, progress)
+	containerID, ports, err := provisionContainer(ctx, st, inst.ID, inst.RepoURL, inst.RepoRoot, inst.WorktreeDir, inst.CreatedAt, params, cmd, runPostCreate, progress)
 	if err != nil {
 		return CreateResult{}, err // provisionContainer already marks StepFailed; already a *coreerr.Error
 	}
@@ -112,14 +121,19 @@ func startInstanceWithCmd(ctx context.Context, st StartStore, params CreateParam
 // doesn't need to sequence the two itself and so a failure between stop
 // and start is reported as one coherent "restart failed", not a
 // half-finished stop the caller has to notice on its own.
+//
+// runPostCreate is false for a plain restart (post_create stays
+// create-only per docs/architecture.md §5.1) and true only when
+// `claudio rebuild` calls through this same path — see StartInstance's
+// doc for why rebuild is the one case that needs it to re-run.
 func RestartInstance(ctx context.Context, st interface {
 	StopStore
 	StartStore
-}, dockerHost string, params CreateParams, idOrName string, fresh bool, progress ProgressFunc) (CreateResult, error) {
+}, dockerHost string, params CreateParams, idOrName string, fresh, runPostCreate bool, progress ProgressFunc) (CreateResult, error) {
 	if err := StopInstance(ctx, st, dockerHost, idOrName); err != nil {
 		return CreateResult{}, fmt.Errorf("core: restart: %w", err)
 	}
-	result, err := StartInstance(ctx, st, params, idOrName, fresh, progress)
+	result, err := StartInstance(ctx, st, params, idOrName, fresh, runPostCreate, progress)
 	if err != nil {
 		return CreateResult{}, fmt.Errorf("core: restart: %w", err)
 	}

@@ -222,7 +222,7 @@ func composeFilesForTest(inst store.Instance) compose.Files {
 
 func startForTest(t *testing.T, s *store.Store, params CreateParams, idOrName string) (CreateResult, error) {
 	t.Helper()
-	return startInstanceWithCmd(context.Background(), s, params, idOrName, false, []string{"sleep", "60"}, nil)
+	return startInstanceWithCmd(context.Background(), s, params, idOrName, false, false, []string{"sleep", "60"}, nil)
 }
 
 // TestCreateInstanceWithSynthesizedServiceNeedsNoHostPort covers the

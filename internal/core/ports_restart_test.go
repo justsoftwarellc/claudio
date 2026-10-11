@@ -35,7 +35,7 @@ func TestAddPortSurvivesRestart(t *testing.T) {
 		t.Fatal("AddPort returned host port 0")
 	}
 
-	restarted, err := RestartInstance(ctx, s, params.DockerHost, params, result.InstanceID, false, nil)
+	restarted, err := RestartInstance(ctx, s, params.DockerHost, params, result.InstanceID, false, false, nil)
 	if err != nil {
 		t.Fatalf("RestartInstance: %v", err)
 	}

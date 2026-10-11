@@ -133,6 +133,64 @@ func TestStartInstanceDoesNotRerunPostCreate(t *testing.T) {
 	}
 }
 
+// TestRebuildRerunsPostCreate verifies the counterpart to the "run once"
+// gate: `claudio rebuild`'s path through RestartInstance passes
+// runPostCreate=true, so post_create must re-execute against the new
+// container — unlike a plain restart (TestStartInstanceDoesNotRerunPostCreate),
+// rebuild discards the old container outright and has nothing else that
+// would reinstall whatever post_create set up there.
+func TestRebuildRerunsPostCreate(t *testing.T) {
+	dockerAvailable(t)
+	s := openTestStore(t)
+	repoURL := newLocalOriginRepo(t)
+	workspaceRoot := t.TempDir()
+
+	createParams := baseCreateParams(t, repoURL)
+	createParams.WorkspaceRoot = workspaceRoot
+	result, err := createForTest(t, s, createParams)
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+
+	// Same trick as the other tests in this file: .claudio.yml didn't
+	// exist at create time, so it's written after and run once manually
+	// to establish the "already ran once" baseline a rebuild must grow
+	// past.
+	claudioYML := filepath.Join(result.WorktreeDir, ".claudio.yml")
+	if err := os.WriteFile(claudioYML, []byte("post_create:\n  - echo run >> post-create-log.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := s.GetInstance(t.Context(), result.InstanceID)
+	if err != nil {
+		t.Fatalf("GetInstance: %v", err)
+	}
+	if err := runPostCreate(t.Context(), "", result.ContainerID, inst.RepoRoot, result.WorktreeDir, filepath.Join(result.WorktreeDir, config.FileName)); err != nil {
+		t.Fatalf("runPostCreate (baseline): %v", err)
+	}
+
+	restartParams := baseCreateParams(t, repoURL)
+	restartParams.WorkspaceRoot = workspaceRoot
+	restartResult, err := restartInstanceForTest(t, s, restartParams, result.InstanceID, false, true)
+	if err != nil {
+		t.Fatalf("RestartInstance (rebuild): %v", err)
+	}
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", restartResult.ContainerID).Run() })
+
+	log, err := os.ReadFile(filepath.Join(result.WorktreeDir, "post-create-log.txt"))
+	if err != nil {
+		t.Fatalf("read post-create-log.txt: %v", err)
+	}
+	lines := 0
+	for _, b := range log {
+		if b == '\n' {
+			lines++
+		}
+	}
+	if lines != 2 {
+		t.Errorf("post-create-log.txt has %d line(s) after rebuild, want exactly 2 (post_create must re-run on rebuild)", lines)
+	}
+}
+
 func TestCreateInstancePostCreateFailureFailsCreate(t *testing.T) {
 	dockerAvailable(t)
 	s := openTestStore(t)

@@ -25,13 +25,17 @@ func TestCreateInstanceReportsProgressAtEachStage(t *testing.T) {
 
 	// Two StepPending reports: the generated instance id, then the
 	// main-clone refresh (a fetch can be slow, and progress exists so a
-	// long create does not sit silent — see refreshBase).
+	// long create does not sit silent — see refreshBase). Two
+	// StepContainerUp reports: the container starting, then
+	// runPostCreateHook's own "running post_create" line (gated to
+	// create — see provisionContainer's runPostCreateHook doc).
 	wantSteps := []store.ProvisionStep{
 		store.StepPending,
 		store.StepPending,
 		store.StepRepoReady,
 		store.StepPortsReady,
 		store.StepConfigReady,
+		store.StepContainerUp,
 		store.StepContainerUp,
 		store.StepHealthy,
 	}
@@ -78,7 +82,7 @@ func TestStartInstanceReportsProgress(t *testing.T) {
 	}
 
 	var steps []store.ProvisionStep
-	startResult, err := startInstanceWithCmd(t.Context(), s, baseCreateParams(t, repoURL), result.InstanceID, false, []string{"sleep", "60"}, func(e ProgressEvent) {
+	startResult, err := startInstanceWithCmd(t.Context(), s, baseCreateParams(t, repoURL), result.InstanceID, false, false, []string{"sleep", "60"}, func(e ProgressEvent) {
 		steps = append(steps, e.Step)
 	})
 	if err != nil {

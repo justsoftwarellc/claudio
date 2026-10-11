@@ -35,7 +35,7 @@ func cmdRestart(ctx context.Context, args []string) int {
 		return 1
 	}
 
-	result, err := c.Restart(ctx, idOrName, fresh, env, terminalProgress())
+	result, err := c.Restart(ctx, idOrName, fresh, false, env, terminalProgress())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio restart:", describeErr(err))
 		return 1

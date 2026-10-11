@@ -111,15 +111,15 @@ func (l *Local) Start(ctx context.Context, idOrName string, fresh bool, env map[
 	if err != nil {
 		return core.CreateResult{}, err
 	}
-	return core.StartInstance(ctx, l.store, params, idOrName, fresh, progress)
+	return core.StartInstance(ctx, l.store, params, idOrName, fresh, false, progress)
 }
 
-func (l *Local) Restart(ctx context.Context, idOrName string, fresh bool, env map[string]string, progress core.ProgressFunc) (core.CreateResult, error) {
+func (l *Local) Restart(ctx context.Context, idOrName string, fresh, runPostCreate bool, env map[string]string, progress core.ProgressFunc) (core.CreateResult, error) {
 	params, err := l.resolveCreateParams(core.CreateParams{Env: env})
 	if err != nil {
 		return core.CreateResult{}, err
 	}
-	return core.RestartInstance(ctx, l.store, l.global.Runtime.DockerHost, params, idOrName, fresh, progress)
+	return core.RestartInstance(ctx, l.store, l.global.Runtime.DockerHost, params, idOrName, fresh, runPostCreate, progress)
 }
 
 func (l *Local) AddPort(ctx context.Context, idOrName string, containerPort int) (int, error) {

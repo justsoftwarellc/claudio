@@ -179,7 +179,7 @@ func TestRestartInstancePreservesInnerCode(t *testing.T) {
 	// since coreerr.Is/CodeOf walk the chain via errors.As.
 	s := openTestStore(t)
 
-	_, err := RestartInstance(context.Background(), s, "", CreateParams{}, "does-not-exist", false, nil)
+	_, err := RestartInstance(context.Background(), s, "", CreateParams{}, "does-not-exist", false, false, nil)
 	if !coreerr.Is(err, coreerr.NotFound) {
 		t.Fatalf("RestartInstance(unknown id) code = %v, want NotFound (preserved through restart's own wrap); err = %v", codeOrNone(err), err)
 	}

@@ -52,7 +52,7 @@ func TestResourceOverrideSurvivesRestart(t *testing.T) {
 	// restart` has none to pass.
 	restartParams := baseCreateParams(t, repoURL)
 	restartParams.WorkspaceRoot = params.WorkspaceRoot
-	restarted, err := RestartInstance(ctx, s, params.DockerHost, restartParams, result.InstanceID, false, nil)
+	restarted, err := RestartInstance(ctx, s, params.DockerHost, restartParams, result.InstanceID, false, false, nil)
 	if err != nil {
 		t.Fatalf("RestartInstance: %v", err)
 	}

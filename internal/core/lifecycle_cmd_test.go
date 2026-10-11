@@ -16,15 +16,15 @@ import (
 // need the real claudio/base image built (see createForTest's doc).
 func startInstanceForTest(t *testing.T, s *store.Store, params CreateParams, idOrName string, fresh bool) (CreateResult, error) {
 	t.Helper()
-	return startInstanceWithCmd(context.Background(), s, params, idOrName, fresh, []string{"sleep", "60"}, nil)
+	return startInstanceWithCmd(context.Background(), s, params, idOrName, fresh, false, []string{"sleep", "60"}, nil)
 }
 
-func restartInstanceForTest(t *testing.T, s *store.Store, params CreateParams, idOrName string, fresh bool) (CreateResult, error) {
+func restartInstanceForTest(t *testing.T, s *store.Store, params CreateParams, idOrName string, fresh, runPostCreate bool) (CreateResult, error) {
 	t.Helper()
 	if err := StopInstance(context.Background(), s, "", idOrName); err != nil {
 		return CreateResult{}, err
 	}
-	return startInstanceWithCmd(context.Background(), s, params, idOrName, fresh, []string{"sleep", "60"}, nil)
+	return startInstanceWithCmd(context.Background(), s, params, idOrName, fresh, runPostCreate, []string{"sleep", "60"}, nil)
 }
 
 func TestStopInstanceRemovesContainerReleasesPortsKeepsWorktree(t *testing.T) {
@@ -187,7 +187,7 @@ func TestRestartInstanceStopsThenStarts(t *testing.T) {
 
 	restartParams := baseCreateParams(t, repoURL)
 	restartParams.WorkspaceRoot = workspaceRoot
-	restartResult, err := restartInstanceForTest(t, s, restartParams, result.InstanceID, false)
+	restartResult, err := restartInstanceForTest(t, s, restartParams, result.InstanceID, false, false)
 	if err != nil {
 		t.Fatalf("RestartInstance: %v", err)
 	}

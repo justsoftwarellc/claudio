@@ -605,6 +605,8 @@ The summary line reports the drift the rebuild closed (`Image 4e1269969011 -> 98
 
 `--fresh` discards `home/` exactly as it does for `start`/`restart`; the default resumes the existing session (§4.1).
 
+Unlike a plain `restart`, `rebuild` also re-runs `post_create` (§5.1) against the new container. `post_create`'s "run once" is about not re-running it when nothing changed; `rebuild` discards the old container outright, so anything `post_create` installed into that container's writable layer — `npm ci`'s `node_modules`, say — is gone, and `post_start` would otherwise run against a container missing whatever `post_create` was relied on to set up.
+
 ### 9.3 Non-interactive control
 
 For scripting and the web UI, the daemon exposes:
