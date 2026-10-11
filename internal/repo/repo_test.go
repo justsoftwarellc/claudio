@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSlug(t *testing.T) {
@@ -449,4 +450,74 @@ func TestWorktreeAcrossContainerBoundary(t *testing.T) {
 	if strings.TrimSpace(hostLog) != "from container" {
 		t.Fatalf("host does not see container's commit: log = %q", hostLog)
 	}
+}
+
+// Destroying one instance must leave every other instance on the same
+// repo fully usable: the sibling's admin dir under
+// main-clone/.git/worktrees is what makes its working tree a git repo at
+// all, so losing it breaks commit/push in that session.
+func TestRemoveWorktreeLeavesSiblingWorktreeIntact(t *testing.T) {
+	origin := newLocalOriginRepo(t)
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	root, err := EnsureRoot(ctx, workspace, origin)
+	if err != nil {
+		t.Fatalf("EnsureRoot: %v", err)
+	}
+	if _, err := AddWorktree(ctx, root, "brave-otter", "claudio/brave-otter", true); err != nil {
+		t.Fatalf("AddWorktree brave-otter: %v", err)
+	}
+	siblingDir, err := AddWorktree(ctx, root, "calm-heron", "claudio/calm-heron", true)
+	if err != nil {
+		t.Fatalf("AddWorktree calm-heron: %v", err)
+	}
+
+	if err := RemoveWorktree(ctx, root, "brave-otter"); err != nil {
+		t.Fatalf("RemoveWorktree: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(root.MainClone, ".git", "worktrees", "calm-heron")); err != nil {
+		t.Fatalf("sibling admin dir was removed along with brave-otter: %v", err)
+	}
+	out := runOut(t, siblingDir, "rev-parse", "--abbrev-ref", "HEAD")
+	if strings.TrimSpace(out) != "claudio/calm-heron" {
+		t.Fatalf("sibling branch = %q, want claudio/calm-heron", out)
+	}
+	run(t, siblingDir, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "--allow-empty", "-m", "still works")
+}
+
+// `git gc` in main-clone — which a fetch can trigger on its own — prunes
+// worktrees whose reverse pointer it cannot resolve once they are older
+// than gc.worktreePruneExpire (three months by default). Every claudio
+// worktree looks that way to host git, so a long-lived instance must
+// survive a gc.
+func TestLongLivedWorktreeSurvivesGC(t *testing.T) {
+	origin := newLocalOriginRepo(t)
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	root, err := EnsureRoot(ctx, workspace, origin)
+	if err != nil {
+		t.Fatalf("EnsureRoot: %v", err)
+	}
+	worktreeDir, err := AddWorktree(ctx, root, "brave-otter", "claudio/brave-otter", true)
+	if err != nil {
+		t.Fatalf("AddWorktree: %v", err)
+	}
+
+	adminDir := filepath.Join(root.MainClone, ".git", "worktrees", "brave-otter")
+	old := time.Now().Add(-200 * 24 * time.Hour)
+	for _, name := range []string{"gitdir", "index"} {
+		if err := os.Chtimes(filepath.Join(adminDir, name), old, old); err != nil {
+			t.Fatalf("age %s: %v", name, err)
+		}
+	}
+
+	run(t, root.MainClone, "gc")
+
+	if _, err := os.Stat(adminDir); err != nil {
+		t.Fatalf("gc pruned a live worktree's admin dir: %v", err)
+	}
+	run(t, worktreeDir, "status")
 }
