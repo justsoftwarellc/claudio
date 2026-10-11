@@ -167,6 +167,158 @@ func TestCreateAttachDestroyEndToEnd(t *testing.T) {
 	}
 }
 
+// TestAttachStartsAStoppedContainer exercises the gap behind the
+// reported bug: a container that exited (crash, host reboot, or a
+// plain `claudio stop`) still has a healthy-looking store row, so only
+// a live Docker check — not GetInstance — can tell it apart from a
+// running one. Without ensureRunningForAttach, attach would hand that
+// name straight to `docker exec`, which fails outright against a
+// non-running container ("No such container" when the daemon can't be
+// reached at all pinned to the right socket, or a plain "is not
+// running" otherwise). This drives the same decision cmdAttach makes,
+// stopping short of the syscall.Exec tail that would replace the test
+// binary.
+func TestAttachStartsAStoppedContainer(t *testing.T) {
+	ctx := context.Background()
+	if _, err := engine.DetectRuntime(ctx, ""); err != nil {
+		t.Skipf("no reachable Docker-API-compatible daemon: %v", err)
+	}
+	if err := exec.Command("docker", "image", "inspect", "claudio/base:dev").Run(); err != nil {
+		t.Skip("claudio/base:dev image not built locally — build it with `docker build -t claudio/base:dev image/` to run this test")
+	}
+	if out, err := exec.Command("docker", "tag", "claudio/base:dev", "claudio/base:latest").CombinedOutput(); err != nil {
+		t.Fatalf("docker tag: %v: %s", err, out)
+	}
+
+	t.Setenv("CLAUDIO_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+	repoURL := newLocalOriginRepoForCLI(t)
+
+	if code := run([]string{"create", repoURL}); code != 0 {
+		t.Fatalf("claudio create exited %d, want 0", code)
+	}
+
+	c, err := newClient(ctx)
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+	instances, _, err := c.ListInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("len(instances) = %d, want 1", len(instances))
+	}
+	id := instances[0].ID
+	c.Close()
+	t.Cleanup(func() {
+		c, err := newClient(ctx)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		if inst, err := c.GetInstance(ctx, id); err == nil && inst.ContainerID != nil {
+			exec.Command("docker", "rm", "-f", *inst.ContainerID).Run()
+		}
+	})
+
+	if code := run([]string{"stop", id}); code != 0 {
+		t.Fatalf("claudio stop %s exited %d, want 0", id, code)
+	}
+
+	c2, err := newClient(ctx)
+	if err != nil {
+		t.Fatalf("newClient (post-stop): %v", err)
+	}
+	preView, err := c2.Status(ctx, id)
+	if err != nil {
+		t.Fatalf("Status (post-stop): %v", err)
+	}
+	if preView.ContainerRunning {
+		t.Fatalf("precondition: instance %s still ContainerRunning after `claudio stop`", id)
+	}
+
+	inst, ok := ensureRunningForAttach(ctx, c2, id)
+	c2.Close()
+	if !ok {
+		t.Fatalf("ensureRunningForAttach(%s) = false, want it to start the stopped container", id)
+	}
+	if inst.ID != id {
+		t.Errorf("ensureRunningForAttach returned instance %q, want %q", inst.ID, id)
+	}
+
+	c3, err := newClient(ctx)
+	if err != nil {
+		t.Fatalf("newClient (post-ensure): %v", err)
+	}
+	defer c3.Close()
+	postView, err := c3.Status(ctx, id)
+	if err != nil {
+		t.Fatalf("Status (post-ensure): %v", err)
+	}
+	if !postView.ContainerRunning {
+		t.Errorf("instance %s still not running after ensureRunningForAttach, want it started", id)
+	}
+	if postView.ContainerID != nil {
+		t.Cleanup(func() { exec.Command("docker", "rm", "-f", *postView.ContainerID).Run() })
+	}
+}
+
+// ensureRunningForAttach must not call Start against an already-running
+// instance: StartInstance itself rejects that ("instance is running,
+// not stopped") since Start is also create's resume path, not an
+// idempotent "make sure it's up". A caller that skipped the live check
+// and called Start unconditionally would break attach against every
+// healthy instance.
+func TestAttachLeavesARunningContainerAlone(t *testing.T) {
+	ctx := context.Background()
+	if _, err := engine.DetectRuntime(ctx, ""); err != nil {
+		t.Skipf("no reachable Docker-API-compatible daemon: %v", err)
+	}
+	if err := exec.Command("docker", "image", "inspect", "claudio/base:dev").Run(); err != nil {
+		t.Skip("claudio/base:dev image not built locally — build it with `docker build -t claudio/base:dev image/` to run this test")
+	}
+	if out, err := exec.Command("docker", "tag", "claudio/base:dev", "claudio/base:latest").CombinedOutput(); err != nil {
+		t.Fatalf("docker tag: %v: %s", err, out)
+	}
+
+	t.Setenv("CLAUDIO_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+	repoURL := newLocalOriginRepoForCLI(t)
+
+	if code := run([]string{"create", repoURL}); code != 0 {
+		t.Fatalf("claudio create exited %d, want 0", code)
+	}
+
+	c, err := newClient(ctx)
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+	instances, _, err := c.ListInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("len(instances) = %d, want 1", len(instances))
+	}
+	id := instances[0].ID
+	containerID := instances[0].ContainerID
+	t.Cleanup(func() {
+		if containerID != nil {
+			exec.Command("docker", "rm", "-f", *containerID).Run()
+		}
+	})
+
+	inst, ok := ensureRunningForAttach(ctx, c, id)
+	c.Close()
+	if !ok {
+		t.Fatalf("ensureRunningForAttach(%s) = false against an already-running instance", id)
+	}
+	if inst.ID != id {
+		t.Errorf("ensureRunningForAttach returned instance %q, want %q", inst.ID, id)
+	}
+}
+
 // TestCreateBranchCollisionSuggestsAlternative exercises ROD-97's
 // collision UX (retryCreateWithSuggestedBranch in create.go): a second
 // `create --new-branch` naming a branch the first instance already

@@ -139,9 +139,9 @@ func TestRebuildRejectsMissingCredentialBeforeBuilding(t *testing.T) {
 // and suggested `docker debug claudio-<id>`, which is not a Claudio
 // workflow. DOCKER_CLI_HINTS=false is Docker's opt-out.
 func TestDockerExecEnvSuppressesDockerCLIHints(t *testing.T) {
-	env := dockerExecEnv()
+	env := dockerExecEnv("")
 	if len(env) == 0 || env[0] != "DOCKER_CLI_HINTS=false" {
-		t.Fatalf("dockerExecEnv()[0] = %q, want %q", firstOrEmpty(env), "DOCKER_CLI_HINTS=false")
+		t.Fatalf("dockerExecEnv(\"\")[0] = %q, want %q", firstOrEmpty(env), "DOCKER_CLI_HINTS=false")
 	}
 }
 
@@ -151,7 +151,7 @@ func TestDockerExecEnvSuppressesDockerCLIHints(t *testing.T) {
 func TestDockerExecEnvLetsAnExplicitSettingWin(t *testing.T) {
 	t.Setenv("DOCKER_CLI_HINTS", "true")
 
-	env := dockerExecEnv()
+	env := dockerExecEnv("")
 	lastIdx, lastVal := -1, ""
 	for i, kv := range env {
 		if strings.HasPrefix(kv, "DOCKER_CLI_HINTS=") {
@@ -163,6 +163,40 @@ func TestDockerExecEnvLetsAnExplicitSettingWin(t *testing.T) {
 	}
 	if lastVal != "DOCKER_CLI_HINTS=true" {
 		t.Errorf("last DOCKER_CLI_HINTS = %q, want the user's own %q", lastVal, "DOCKER_CLI_HINTS=true")
+	}
+}
+
+// attach/logs syscall.Exec into the bare `docker` CLI, which otherwise
+// resolves the daemon from whatever DOCKER_HOST/context is ambient in
+// the shell — independently of the docker_host Claudio itself resolved
+// (global config, then DOCKER_HOST, then the CLI's current context,
+// then the SDK default; see engine.DetectRuntime). Passing that
+// resolved host through keeps the exec pointed at the same daemon
+// Claudio believes the container is on.
+func TestDockerExecEnvPinsDockerHostWhenGiven(t *testing.T) {
+	env := dockerExecEnv("unix:///home/user/.orbstack/run/docker.sock")
+	found := false
+	for _, kv := range env {
+		if kv == "DOCKER_HOST=unix:///home/user/.orbstack/run/docker.sock" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("dockerExecEnv(host) = %v, want it to contain DOCKER_HOST=<host>", env)
+	}
+}
+
+// Empty host means "resolve automatically" everywhere else in Claudio
+// (engine.DetectRuntime's own doc); dockerExecEnv must leave that
+// resolution to the exec'd docker CLI itself rather than forcing an
+// empty DOCKER_HOST=, which would override a value the user has set in
+// their own shell with nothing.
+func TestDockerExecEnvOmitsDockerHostWhenEmpty(t *testing.T) {
+	env := dockerExecEnv("")
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "DOCKER_HOST=") {
+			t.Fatalf("dockerExecEnv(\"\") set %q, want no DOCKER_HOST entry", kv)
+		}
 	}
 }
 

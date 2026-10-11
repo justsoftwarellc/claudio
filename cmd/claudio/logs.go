@@ -80,6 +80,7 @@ func cmdLogs(ctx context.Context, args []string) int {
 		fmt.Fprintln(os.Stderr, "claudio logs:", describeErr(err))
 		return 1
 	}
+	dockerHost := c.DockerHost()
 	c.Close() // done with the store; the exec below replaces this process anyway
 
 	if !inst.IsCompose() && service != "" {
@@ -141,7 +142,7 @@ func cmdLogs(ctx context.Context, args []string) int {
 		}
 	}
 
-	if err := syscall.Exec(dockerPath, execArgs, dockerExecEnv()); err != nil {
+	if err := syscall.Exec(dockerPath, execArgs, dockerExecEnv(dockerHost)); err != nil {
 		fmt.Fprintln(os.Stderr, "claudio logs: exec docker:", err)
 		return 1
 	}
