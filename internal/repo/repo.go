@@ -236,6 +236,13 @@ func AddWorktree(ctx context.Context, root Root, id, branch string, newBranch bo
 	if err := relativizeGitdir(root, id); err != nil {
 		return "", err
 	}
+	// Host git cannot resolve the pointer just relativized, so its own
+	// gc-time prune would delete this worktree's admin dir once it aged
+	// past the default expiry. Set here rather than at clone/init so
+	// roots created before this existed pick it up on their next create.
+	if _, err := runGit(ctx, root.MainClone, "config", "gc.worktreePruneExpire", "never"); err != nil {
+		return "", fmt.Errorf("repo: disable worktree pruning in %s: %w", root.MainClone, err)
+	}
 	return worktreeDir, nil
 }
 
@@ -283,8 +290,8 @@ func relativizeGitdir(root Root, id string) error {
 	return nil
 }
 
-// RemoveWorktree removes worktree id via `git worktree remove` and prunes
-// stale administrative metadata. The root and its object store are left
+// RemoveWorktree removes worktree id via `git worktree remove` along with
+// its own administrative metadata. The root and its object store are left
 // untouched (docs/architecture.md §5.1: "the root and its objects stay");
 // orphaned roots are reclaimed separately by `claudio gc` (ROD-107).
 //
@@ -334,11 +341,13 @@ func RemoveWorktree(ctx context.Context, root Root, id string) error {
 		return fmt.Errorf("repo: remove orphaned worktree dir %s: %w", worktreeDir, err)
 	}
 
-	// Unconditional: this is what clears whatever administrative state is
-	// left, including after the orphan path above, and it is a no-op on a
-	// repo with nothing to prune.
-	if _, err := runGit(ctx, root.MainClone, "worktree", "prune"); err != nil {
-		return fmt.Errorf("repo: prune worktrees: %w", err)
+	// Scoped to this id, never `git worktree prune`: host git cannot
+	// resolve the relativized reverse pointers of the repo's other
+	// worktrees (relativizeGitdir), so a prune treats every sibling as
+	// stale and deletes its admin dir, leaving that instance's working
+	// tree no longer a git repository.
+	if err := os.RemoveAll(adminDir); err != nil {
+		return fmt.Errorf("repo: remove worktree admin dir for %s: %w", id, err)
 	}
 	return nil
 }
