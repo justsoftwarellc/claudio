@@ -12,10 +12,14 @@ ARG USER_GID=1000
 # the session Claude Code runs inside (§7.2 — detach without killing it);
 # git for the worktree the container mounts; ripgrep because Claude Code
 # itself uses it. curl/ca-certificates for anything the agent installs.
+# gh for the GitHub token entrypoint.sh wires up as a git credential
+# helper (ROD-108 stopgap) — `gh pr create` etc. then work the same way
+# `git push` does, off the same injected token.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         tini \
         tmux \
         git \
+        gh \
         ripgrep \
         curl \
         ca-certificates \

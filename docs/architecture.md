@@ -560,6 +560,8 @@ Three distinct secrets, three different handling rules:
 
 The credential proxy is the important one: it means an agent can push a branch without ever holding a token it could exfiltrate, and every push is attributable and optionally gated.
 
+**Known limitation, accepted as a stopgap until ROD-108's broker exists:** `claudio attach` surfaced that the container had *no* git credentials at all — host-side cloning covers provisioning, but an agent inside the session got "Authentication failed" on its first `git push` or `gh` call, since nothing else in the image supplies one. Until the broker above is built, `credentialEnv` (`cmd/claudio/env.go`) reads `GH_TOKEN`/`GITHUB_TOKEN` from the operator's shell (falling back to `gh auth token` if `gh` is installed and logged in on the host) and injects it the same way as the Anthropic token. `image/entrypoint.sh` runs `gh auth setup-git` when it's present, which wires it in as git's `credential.helper` for `github.com`. Same caveat as the Anthropic token: one shared credential across every container, un-gated and un-attributable per push — exactly what the broker replaces.
+
 ### 8.1 Anthropic authentication
 
 The credential is a **subscription token**, not a Console API key. `claude setup-token` converts an existing Claude subscription into a long-lived token, so instances bill against the subscription rather than metered API usage. (Verified on the development machine: `claude auth status` reports `authMethod: claude.ai`, `subscriptionType: max`, with no `ANTHROPIC_API_KEY` set.)

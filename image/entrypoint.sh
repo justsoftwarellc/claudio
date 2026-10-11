@@ -219,6 +219,27 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; the
 	exit 1
 fi
 
+# Wire GH_TOKEN (cmd/claudio/env.go's githubEnv, ROD-108 stopgap) up as a
+# git credential helper, so `git fetch`/`git push` over HTTPS and `gh`
+# itself authenticate as the operator inside the container. Without
+# this, the container has git but no credentials at all — host-side
+# cloning (§5.1) never needed any, so nothing else in the image supplies
+# one, and an agent hit "Authentication failed" on its first `git push`.
+#
+# `gh auth setup-git` is `gh`'s own supported way to install itself as
+# git's credential.helper for github.com (and ssh.github.com); it reads
+# GH_TOKEN directly, so no `gh auth login` flow or extra config file is
+# needed. Run as the agent user (whoami below) since it writes to
+# ~/.gitconfig, which is agent's — the safe.directory config earlier in
+# this image was written the same way for the same reason.
+#
+# Skipped silently when GH_TOKEN is unset: a token is optional (unlike
+# the Anthropic one above), and an instance with none still works for
+# everything that isn't a fetch/push against a real remote.
+if [ -n "${GH_TOKEN:-}" ]; then
+	gh auth setup-git >/dev/null 2>&1 || echo "entrypoint: gh auth setup-git failed; git push/fetch may be unauthenticated." >&2
+fi
+
 # Start a detached tmux session so it exists before anyone attaches, and
 # survives this script's own exit (tini keeps the tmux server process
 # alive as long as it has a client or a session — the container's
