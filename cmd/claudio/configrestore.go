@@ -117,6 +117,10 @@ func cmdConfig(ctx context.Context, args []string) int {
 		return cmdConfigSet(ctx, args[1:])
 	case "get":
 		return cmdConfigGet(ctx, args[1:])
+	case "add":
+		return cmdConfigAdd(ctx, args[1:])
+	case "remove":
+		return cmdConfigRemove(ctx, args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "claudio config: unknown subcommand %q\n\n%s\n", args[0], configUsage)
 		return 1
@@ -126,4 +130,7 @@ func cmdConfig(ctx context.Context, args []string) int {
 const configUsage = `Usage:
   claudio config restore [<id>] [--json]
   claudio config set editor <binary>
-  claudio config get editor`
+  claudio config get editor
+  claudio config add ssh_keys <path>
+  claudio config remove ssh_keys <path>
+  claudio config get ssh_keys`

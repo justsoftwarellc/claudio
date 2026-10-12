@@ -92,6 +92,9 @@ type AgentSpec struct {
 	RepoRoot    string
 	WorktreeDir string
 	HomeDir     string
+	// SSHKeys are host key files mounted read-only — the same contract
+	// as engine.CreateSpec.SSHKeys. Empty means no mounts.
+	SSHKeys []string
 
 	Resources engine.ResourceLimits
 	Env       map[string]string
@@ -230,10 +233,7 @@ func GenerateOverride(networkName string, sidecarServiceNames []string, rewrites
 		Environment: agent.Env,
 		Command:     agent.Cmd,
 		WorkingDir:  containerWorkdir,
-		Volumes: []string{
-			agent.RepoRoot + ":/repo",
-			agent.HomeDir + ":/home/agent",
-		},
+		Volumes:     agentVolumes(agent),
 		Labels: map[string]string{
 			engine.LabelInstanceID: agent.InstanceID,
 			engine.LabelRepo:       agent.RepoURL,
@@ -301,4 +301,18 @@ func dockerCPUs(nanoCPUs int64) string {
 		return fmt.Sprintf("%d", whole)
 	}
 	return fmt.Sprintf("%g", float64(nanoCPUs)/1_000_000_000)
+}
+
+// agentVolumes renders the agent's bind mounts — the same set, in the
+// same order, as engine.CreateAndStart's, so the compose path does not
+// hand the agent a different filesystem than the single-container path.
+func agentVolumes(agent AgentSpec) []string {
+	out := []string{
+		agent.RepoRoot + ":/repo",
+		agent.HomeDir + ":/home/agent",
+	}
+	for _, key := range agent.SSHKeys {
+		out = append(out, key+":"+engine.SSHKeyTarget(key)+":ro")
+	}
+	return out
 }

@@ -31,6 +31,11 @@ func cmdConfigSet(ctx context.Context, args []string) int {
 		return 1
 	}
 	if rest[0] != "editor" {
+		if rest[0] == "ssh_keys" {
+			// The natural first guess for someone who has used `set editor`.
+			fmt.Fprintln(os.Stderr, "claudio config set: ssh_keys is a list — use: claudio config add ssh_keys <path>")
+			return 1
+		}
 		fmt.Fprintf(os.Stderr, "claudio config set: unknown key %q (known keys: editor)\n", rest[0])
 		return 1
 	}
@@ -90,11 +95,11 @@ func cmdConfigGet(ctx context.Context, args []string) int {
 	}
 
 	if len(rest) != 1 {
-		fmt.Fprintln(os.Stderr, "claudio config get: expected exactly one key\n\nUsage:\n  claudio config get editor")
+		fmt.Fprintln(os.Stderr, "claudio config get: expected exactly one key\n\nUsage:\n  claudio config get editor\n  claudio config get ssh_keys")
 		return 1
 	}
-	if rest[0] != "editor" {
-		fmt.Fprintf(os.Stderr, "claudio config get: unknown key %q (known keys: editor)\n", rest[0])
+	if rest[0] != "editor" && rest[0] != "ssh_keys" {
+		fmt.Fprintf(os.Stderr, "claudio config get: unknown key %q (known keys: editor, ssh_keys)\n", rest[0])
 		return 1
 	}
 
@@ -107,6 +112,20 @@ func cmdConfigGet(ctx context.Context, args []string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claudio config get:", err)
 		return 1
+	}
+	if rest[0] == "ssh_keys" {
+		// One path per line, as stored. An empty list is the default
+		// state rather than a missing setting, so it is not an error the
+		// way an unset editor is — just nothing on stdout.
+		if len(global.SSHKeys) == 0 {
+			fmt.Fprintln(os.Stderr, "claudio config get: no ssh keys configured\n"+
+				"  add one with: claudio config add ssh_keys <path>")
+			return 0
+		}
+		for _, k := range global.SSHKeys {
+			fmt.Println(k)
+		}
+		return 0
 	}
 	if global.Editor == "" {
 		fmt.Fprintln(os.Stderr, "claudio config get: no editor configured\n"+

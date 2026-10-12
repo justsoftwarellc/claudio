@@ -193,6 +193,17 @@ type GlobalConfig struct {
 	// actually run — see cmdOpen on why the requirement bites at first
 	// use rather than at install or on every command.
 	Editor string `yaml:"editor,omitempty"`
+	// SSHKeys are private key files on this machine to mount read-only
+	// into every instance, so git inside one can reach an SSH remote
+	// (`~` is expanded). Empty by default, and deliberately so: a key is
+	// readable by the agent that is handed it, for every host it opens,
+	// so which ones cross the sandbox boundary is the operator's call
+	// rather than "whatever is in ~/.ssh".
+	//
+	// Global-only for the same reason as Editor: which keys a person
+	// holds is a property of the machine, and a repo must not be able to
+	// ask for them.
+	SSHKeys []string `yaml:"ssh_keys,omitempty"`
 }
 
 // Defaults returns the global config's built-in defaults before any file

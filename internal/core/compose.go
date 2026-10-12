@@ -157,6 +157,7 @@ func provisionCompose(ctx context.Context, st CreateStore, composeFilePath strin
 		RepoRoot:     repoRoot,
 		WorktreeDir:  worktreeDir,
 		HomeDir:      homeDir,
+		SSHKeys:      params.SSHKeys,
 		Resources:    resources,
 		Env:          params.Env,
 	})

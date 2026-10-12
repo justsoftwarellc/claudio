@@ -94,6 +94,39 @@ func TestGenerateOverrideProducesValidYAML(t *testing.T) {
 	if !foundHomeMount {
 		t.Errorf("agent.Volumes = %v, want a mount ending :/home/agent", agent.Volumes)
 	}
+	for _, v := range agent.Volumes {
+		if strings.Contains(v, engine.SSHKeyMountDir) {
+			t.Errorf("agent.Volumes = %v, want no ssh key mount when AgentSpec.SSHKeys is empty", agent.Volumes)
+		}
+	}
+}
+
+// The compose path must hand the agent the same keys the
+// single-container path does, or git over SSH works in one kind of
+// instance and not the other.
+func TestGenerateOverrideMountsSSHKeysReadOnly(t *testing.T) {
+	repoRoot, worktreeDir := fixRepoRootAndWorktree(t)
+
+	out, err := GenerateOverride("claudio_test1", nil, nil, AgentSpec{
+		InstanceID:  "test1",
+		Image:       "claudio/base:latest",
+		RepoRoot:    repoRoot,
+		WorktreeDir: worktreeDir,
+		HomeDir:     "/home/test1",
+		SSHKeys:     []string{"/Users/me/.ssh/id_ed25519"},
+	})
+	if err != nil {
+		t.Fatalf("GenerateOverride: %v", err)
+	}
+	var doc composeFile
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("generated override is not valid YAML: %v\n%s", err, out)
+	}
+	volumes := doc.Services[AgentServiceName].Volumes
+	want := "/Users/me/.ssh/id_ed25519:/opt/claudio/ssh-keys/id_ed25519:ro"
+	if len(volumes) != 3 || volumes[2] != want {
+		t.Errorf("agent.Volumes = %v, want %q after the repo and home mounts", volumes, want)
+	}
 }
 
 // TestOverrideStringListMarshalsWithOverrideTag pins the fix for a real

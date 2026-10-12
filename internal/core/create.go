@@ -70,11 +70,17 @@ type CreateParams struct {
 	// already running on the host this instance may reach by name
 	// (ROD-128). Layered over the repo's own host_services: by
 	// resolveHostServices, local winning by name.
-	HostServices  []config.HostService `json:"host_services,omitempty"`
-	Env           map[string]string    `json:"env,omitempty"`      // credential + any extra vars, e.g. CLAUDE_CODE_OAUTH_TOKEN
-	EnvFile       string               `json:"env_file,omitempty"` // --env-file: host path to copy into the worktree at .claudio/env (docs/architecture.md §5.1)
-	WorkspaceRoot string               `json:"workspace_root,omitempty"`
-	Image         string               `json:"image,omitempty"`
+	HostServices []config.HostService `json:"host_services,omitempty"`
+	Env          map[string]string    `json:"env,omitempty"`      // credential + any extra vars, e.g. CLAUDE_CODE_OAUTH_TOKEN
+	EnvFile      string               `json:"env_file,omitempty"` // --env-file: host path to copy into the worktree at .claudio/env (docs/architecture.md §5.1)
+	// SSHKeys are the host key files to mount read-only into the
+	// container so git over SSH works inside it
+	// (engine.CreateSpec.SSHKeys). Resolved from the global config's
+	// ssh_keys: by client.Local.resolveCreateParams, not typed per
+	// command — and so re-derived on every start/restart, like Env.
+	SSHKeys       []string `json:"ssh_keys,omitempty"`
+	WorkspaceRoot string   `json:"workspace_root,omitempty"`
+	Image         string   `json:"image,omitempty"`
 	// Resources is the global-config baseline, resolved by
 	// client.Local.resolveCreateParams before CreateInstance ever runs —
 	// same "resolved ahead of time" contract as WorkspaceRoot/DockerHost
@@ -539,6 +545,7 @@ func provisionContainer(ctx context.Context, st CreateStore, id, repoURL, repoRo
 			RepoRoot:     repoRoot,
 			WorktreeDir:  worktreeDir,
 			HomeDir:      homeDir,
+			SSHKeys:      params.SSHKeys,
 			Ports:        toBindings(ports),
 			Resources:    resources,
 			HostServices: hostServices,

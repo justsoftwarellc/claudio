@@ -120,6 +120,24 @@ func TestLoadGlobalConfigDefaultsWhenAbsent(t *testing.T) {
 	if cfg.Ports.Bind != "127.0.0.1" {
 		t.Fatalf("expected default bind 127.0.0.1, got %s", cfg.Ports.Bind)
 	}
+	// No key crosses into an instance unless the operator lists it.
+	if len(cfg.SSHKeys) != 0 {
+		t.Fatalf("expected no ssh_keys by default, got %v", cfg.SSHKeys)
+	}
+}
+
+func TestLoadGlobalConfigReadsSSHKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	if err := os.WriteFile(path, []byte("ssh_keys:\n  - ~/.ssh/id_ed25519\n  - /keys/work\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := LoadGlobalConfig(path)
+	if err != nil {
+		t.Fatalf("LoadGlobalConfig: %v", err)
+	}
+	if len(cfg.SSHKeys) != 2 || cfg.SSHKeys[0] != "~/.ssh/id_ed25519" || cfg.SSHKeys[1] != "/keys/work" {
+		t.Fatalf("SSHKeys = %v, want the two listed paths, verbatim", cfg.SSHKeys)
+	}
 }
 
 func TestLoadGlobalConfigOverridesDefaults(t *testing.T) {

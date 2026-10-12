@@ -62,6 +62,11 @@ func (l *Local) resolveCreateParams(params core.CreateParams) (core.CreateParams
 	params.DockerHost = l.global.Runtime.DockerHost
 	params.PortRangeLow = l.global.Ports.Range[0]
 	params.PortRangeHigh = l.global.Ports.Range[1]
+	sshKeys, err := config.ResolveSSHKeys(l.global.SSHKeys)
+	if err != nil {
+		return core.CreateParams{}, err
+	}
+	params.SSHKeys = sshKeys
 	// params.Image is deliberately left as-is here (empty unless the
 	// caller set one explicitly, e.g. --image or a resolved-config
 	// value): core.resolveImage picks the actual default (base vs. a

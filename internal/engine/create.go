@@ -154,6 +154,15 @@ type CreateSpec struct {
 	// design — verified working in ROD-99).
 	HomeDir string
 
+	// SSHKeys are host paths to private keys, each bind-mounted
+	// read-only under SSHKeyMountDir by its base name, so git inside the
+	// container authenticates to an SSH remote (ROD-108 stopgap, the SSH
+	// counterpart to the GH_TOKEN passthrough). Opt-in: these are the
+	// `ssh_keys:` the operator listed in ~/.claudio/config.yml, and an
+	// empty list mounts nothing. Base names must be unique — the caller
+	// (config.ResolveSSHKeys) rejects a clash before it gets here.
+	SSHKeys []string
+
 	Ports     []PortBinding
 	Resources ResourceLimits
 
@@ -235,10 +244,7 @@ func CreateAndStart(ctx context.Context, host string, spec CreateSpec) (containe
 	}
 
 	hostConfig := &container.HostConfig{
-		Mounts: []mount.Mount{
-			{Type: mount.TypeBind, Source: spec.RepoRoot, Target: "/repo"},
-			{Type: mount.TypeBind, Source: spec.HomeDir, Target: "/home/agent"},
-		},
+		Mounts:       mounts(spec),
 		PortBindings: portBindings,
 		ExtraHosts:   ExtraHosts(spec.HostServices),
 		Resources: container.Resources{
@@ -272,6 +278,30 @@ func CreateAndStart(ctx context.Context, host string, spec CreateSpec) (containe
 	}
 
 	return resp.ID, nil
+}
+
+// SSHKeyMountDir is where CreateSpec.SSHKeys land inside the container.
+// Outside /home/agent on purpose: a file mounted inside the home bind
+// mount makes Docker create an empty placeholder for it in the host's
+// copy of that home. image/entrypoint.sh reads this directory, and the
+// compose path (internal/compose) mounts into it via SSHKeyTarget.
+const SSHKeyMountDir = "/opt/claudio/ssh-keys"
+
+// SSHKeyTarget is the in-container path a host key file is mounted at.
+func SSHKeyTarget(hostPath string) string {
+	return SSHKeyMountDir + "/" + filepath.Base(hostPath)
+}
+
+// mounts renders spec's bind mounts.
+func mounts(spec CreateSpec) []mount.Mount {
+	out := []mount.Mount{
+		{Type: mount.TypeBind, Source: spec.RepoRoot, Target: "/repo"},
+		{Type: mount.TypeBind, Source: spec.HomeDir, Target: "/home/agent"},
+	}
+	for _, key := range spec.SSHKeys {
+		out = append(out, mount.Mount{Type: mount.TypeBind, Source: key, Target: SSHKeyTarget(key), ReadOnly: true})
+	}
+	return out
 }
 
 // ContainerWorkdir computes /repo/worktrees/<name> from the host

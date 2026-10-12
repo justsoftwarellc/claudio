@@ -10,6 +10,8 @@
 
 **Clone failed over SSH** — claudio clones the way `git clone` does from your shell. If `git clone <repo>` fails on its own, `claudio create` will too. Check your SSH agent has the right key loaded.
 
+**`git fetch`/`git push` fails inside an instance over SSH** — "Permission denied (publickey)" means no key is mounted: `claudio config add ssh_keys <path>`, then `claudio restart <id>` (see [`ssh_keys`](./configuration.md#ssh_keys)). "cannot run ssh" means the instance predates the image that ships an SSH client: `claudio rebuild <id>`.
+
 **Sidecar unhealthy** — `claudio status <id>` lists each sidecar's live state; `claudio logs <id> --service <name>` gets its actual output.
 
 **Workspace files are owned by the wrong user** — the base image is built with `USER_UID`/`USER_GID` matched to your host user. Run `docker image inspect claudio/base:latest` and confirm the UID matches `id -u`. A stale image built before a UID change is the usual cause: run `claudio image build` again.

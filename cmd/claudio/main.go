@@ -113,6 +113,12 @@ Usage:
   claudio config set editor <binary>
                                    set the editor "claudio open" launches
   claudio config get editor       print the configured editor
+  claudio config add ssh_keys <path>
+                                   mount a private key into every instance, so
+                                   git inside one can use an SSH remote
+  claudio config remove ssh_keys <path>
+                                   stop mounting it
+  claudio config get ssh_keys     list the keys instances are given
   claudio image build [--repo <path>]
                                    build claudio/base:latest (and a repo-specific
                                    layer, if --repo's .claudio.yml asks for one)

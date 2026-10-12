@@ -178,6 +178,8 @@ With no ID it lists your instances and asks which one, putting any whose repo ma
 
 `claudio create <repo>` accepts `git@host:path`, `ssh://[user@]host/path`, or `https://host/path` — **not** a bare `owner/repo` shorthand. The repo is cloned once per remote URL and reused; each `create` against the same URL adds a new worktree rather than re-cloning.
 
+The clone happens on your host with your own git credentials. For `git fetch`/`git push` to work *inside* an instance against an SSH remote, hand it a key once: `claudio config add ssh_keys ~/.ssh/id_ed25519` (see [`ssh_keys`](#claudioyml-and-configyml)).
+
 Reused, but not stale: every `create` fetches the base branch before making the worktree, so a new instance starts from current upstream rather than from whatever was there when the repo was first cloned.
 
 ```bash
@@ -314,7 +316,7 @@ Full walkthrough, including how to check whether a container's port is actually 
 Two files, both local and neither committed:
 
 - `.claudio.yml` — what this repo needs: ports, services, hooks, instance IDs.
-- `~/.claudio/config.yml` — what this machine allows: resource ceilings, port range, editor. Applies to every instance.
+- `~/.claudio/config.yml` — what this machine allows: resource ceilings, port range, editor, SSH keys. Applies to every instance.
 
 `.claudio.yml` lives in the folder you ran `claudio create .` from, and `create` prints its path. Claudio gitignores it for you. Edits take effect on the next `create` or `restart` — no commit needed.
 
@@ -382,7 +384,20 @@ ports:
   bind: 127.0.0.1               # never 0.0.0.0 by default — see --publish-all-interfaces
 runtime:
   docker_host: ""                # pin a specific Docker endpoint; empty auto-detects
+ssh_keys:                       # private keys mounted read-only into every instance;
+  - ~/.ssh/id_ed25519           #   none by default
+                                #   add one with: claudio config add ssh_keys <path>
 ```
+
+`ssh_keys` is what lets git inside an instance reach a `git@host:path` remote. Manage the list with the CLI rather than by hand — `add` checks the path is a private key file that exists before writing, so a typo fails immediately instead of at the next `create`:
+
+```bash
+claudio config add ssh_keys ~/.ssh/id_ed25519      # validates the file, then lists it
+claudio config get ssh_keys                        # one path per line
+claudio config remove ssh_keys ~/.ssh/id_ed25519
+```
+
+Each entry is a private key file (list files, not a directory; two can't share a file name). A hand-written entry that doesn't exist fails `create`/`start`/`restart` rather than being skipped, and `remove` works on it even after the file is gone. Nothing else from `~/.ssh` crosses over — no `config`, no `known_hosts` — so the container records host keys itself on first connection, and a passphrase-protected key can't be used by the agent's non-interactive `git`. A change reaches a running instance on its next `claudio restart`.
 
 `editor` has no default; every other command works without it. Prefer `claudio config set editor` over hand-editing — it checks the binary resolves on `PATH` first.
 
@@ -399,6 +414,7 @@ If claudio's state database is lost, rebuilt from a backup, or a container is cr
 - **No Docker socket is mounted into agent containers, on purpose.** Mounting `/var/run/docker.sock` is a direct path to host-root access from inside the sandbox. If a repo genuinely needs to run `docker`/`docker compose` itself, that needs a separate, explicitly opt-in rootless Docker-in-Docker sidecar — not something claudio does by default.
 - **Dependency directories (`node_modules`, etc.) are bind-mounted, not offloaded to a named volume.** Volume offloading was measured and rejected: it's 7–15× faster on filesystem metadata operations, but the host loses proper visibility into the directory — which defeats the entire reason to use claudio instead of a headless remote sandbox. If your build is metadata-heavy and slow on a bind mount, that trade was made deliberately; see [`docs/architecture.md`'s Appendix A](docs/architecture.md#appendix-a-mount-strategy-evidence) for the actual measurements rather than re-litigating it from scratch.
 - **The Anthropic credential is shared across every container** (see [First-run auth](#first-run-auth) above) — there is no per-instance isolation yet. Don't assume revoking one instance's access is possible without revoking all of them.
+- **No SSH key enters a container unless you list it.** `claudio config add ssh_keys <path>` (stored as `ssh_keys:` in [`~/.claudio/config.yml`](#claudioyml-and-configyml)) names the private keys to mount, read-only, into every instance, so `git fetch`/`git push` against a `git@host:path` remote work inside one. The list is empty by default because the agent can read any key it is handed, for every host that key opens — add a key scoped to what an agent should reach rather than your everyday one where you can.
 
 ## Troubleshooting
 
@@ -411,6 +427,8 @@ If claudio's state database is lost, rebuilt from a backup, or a container is cr
 **Container exited immediately / "stopped (out of memory)"** — `claudio ls`/`claudio status` will say if it was an OOM kill specifically. Raise the limit with `--memory` on `create`, or in `.claudio.yml`'s `resources:`.
 
 **Clone failed over SSH** — claudio clones exactly the way `git clone` would from your shell; if `git clone <repo>` doesn't work standalone, `claudio create` won't either. Check your SSH agent has the right key loaded.
+
+**`git fetch`/`git push` fails inside an instance over SSH** — "Permission denied (publickey)" means no key is mounted: `claudio config add ssh_keys <path>`, then `claudio restart <id>`. "cannot run ssh" means the instance predates the image that ships an SSH client: `claudio rebuild <id>`.
 
 **Sidecar unhealthy** — `claudio status <id>` lists each sidecar's live state; `claudio logs <id> --service <name>` gets its actual output.
 

@@ -58,6 +58,14 @@ If a detected port is wrong, or a service went undetected, add one with `claudio
 
 `claudio create <repo>` accepts `git@host:path`, `ssh://[user@]host/path`, or `https://host/path` — **not** a bare `owner/repo` shorthand. The repo is cloned once per remote URL and reused; each `create` against the same URL adds a new worktree rather than re-cloning.
 
+The clone happens on your host with your own git credentials. For `git fetch`/`git push` to work *inside* an instance against an SSH remote, hand it a key once:
+
+```bash
+claudio config add ssh_keys ~/.ssh/id_ed25519
+```
+
+No key is shared unless you add it — see [`ssh_keys`](./configuration.md#ssh_keys).
+
 ### From a local directory
 
 `claudio create .` clones from a directory on disk instead of a remote, for local-only or not-yet-pushed work:

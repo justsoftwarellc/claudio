@@ -15,15 +15,40 @@ ARG USER_GID=1000
 # gh for the GitHub token entrypoint.sh wires up as a git credential
 # helper (ROD-108 stopgap) — `gh pr create` etc. then work the same way
 # `git push` does, off the same injected token.
+# openssh-client because git shells out to `ssh` for every git@host:path
+# remote, which is the form claudio itself normalizes GitHub URLs to
+# (§5.1) — without it `git fetch` dies with "cannot run ssh: No such file
+# or directory" before any key is even consulted. The keys themselves are
+# opt-in, see the ssh_config.d block below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         tini \
         tmux \
         git \
         gh \
+        openssh-client \
         ripgrep \
         curl \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# ssh wiring for the keys `ssh_keys:` in ~/.claudio/config.yml names
+# (engine.CreateSpec.SSHKeys mounts them under /opt/claudio/ssh-keys):
+#
+#   - Include: entrypoint.sh writes one IdentityFile line per mounted
+#     key into that file on every boot. ssh only tries a handful of
+#     default names on its own, and only under ~/.ssh, so a key called
+#     anything else would otherwise be mounted and never offered. A
+#     missing Include target is ignored, which is the no-keys case.
+#   - accept-new: the container starts with no known_hosts (only the
+#     keys cross over, not the host's ~/.ssh), and git runs ssh with no
+#     terminal to answer the first-connection prompt on, so the default
+#     "ask" turns every first fetch into "Host key verification failed".
+#     accept-new records an unseen host and still refuses a *changed*
+#     key; known_hosts lives in home/, so it persists across rebuilds.
+#
+# printf, not a heredoc: the SDK build path is the legacy builder, which
+# builds a heredoc into an empty file (ROD-140).
+RUN printf 'Include /home/agent/.claudio-ssh_config\nStrictHostKeyChecking accept-new\n' > /etc/ssh/ssh_config.d/claudio.conf
 
 # UID/GID matched to the host at build time (build-arg, not baked) — see
 # ROD-96: since /workspace is a bind mount, every file the agent creates

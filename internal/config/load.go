@@ -100,6 +100,7 @@ func LoadGlobalConfig(path string) (GlobalConfig, error) {
 	if fromFile.Editor != "" {
 		cfg.Editor = fromFile.Editor
 	}
+	cfg.SSHKeys = fromFile.SSHKeys
 	return cfg, nil
 }
 

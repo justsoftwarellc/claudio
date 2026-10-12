@@ -17,7 +17,7 @@ An instance killed for exceeding its memory limit is reported as such by `claudi
 Two files, both local to your machine and neither committed:
 
 - `.claudio.yml` — what this repo needs: ports, services, setup commands, instance IDs.
-- `~/.claudio/config.yml` — what this machine allows: resource ceilings, port range, editor. Applies to every instance.
+- `~/.claudio/config.yml` — what this machine allows: resource ceilings, port range, editor, SSH keys. Applies to every instance.
 
 `~/.claudio/` (a directory) is Claudio's own state — repos, worktrees, the database.
 
@@ -102,6 +102,8 @@ ports:
   bind: 127.0.0.1               # never 0.0.0.0 by default — see --publish-all-interfaces
 runtime:
   docker_host: ""                # pin a specific Docker endpoint; empty auto-detects
+ssh_keys:                       # private keys mounted read-only into every instance;
+  - ~/.ssh/id_ed25519           #   none by default
 ```
 
 ### `editor`
@@ -114,6 +116,31 @@ claudio config get editor
 ```
 
 A bare binary name or absolute path; arguments (`code -n`) aren't supported. There's no default — `install.sh` offers to set one. Only `claudio open` needs it.
+
+### `ssh_keys`
+
+The private keys git inside an instance may use to reach a `git@host:path` remote. Empty by default: the agent can read any key it is handed, for every host that key opens, so none crosses the sandbox boundary unless you list it.
+
+Manage the list with the CLI rather than by hand — `add` checks the path is a private key file that exists before writing, so a typo fails immediately:
+
+```bash
+claudio config add ssh_keys ~/.ssh/id_ed25519      # validates the file, then lists it
+claudio config get ssh_keys                        # one path per line
+claudio config remove ssh_keys ~/.ssh/id_ed25519
+```
+
+`add` stores the path absolute and is a no-op for a key already listed. `remove` does not need the file to still exist, so it can always clear a stale entry. Either way the file ends up as:
+
+```yaml
+ssh_keys:
+  - /Users/you/.ssh/id_ed25519
+```
+
+- Each entry is a key **file** (`~` expands), mounted read-only. List files, not the directory holding them; two entries can't share a file name.
+- A hand-written entry that doesn't exist fails `create`/`start`/`restart` with the path named, rather than being skipped.
+- Nothing else from `~/.ssh` is shared — no `config`, no `known_hosts`. The container records a host's key on first connection and refuses it if it later changes.
+- A passphrase-protected key can't be used by the agent's non-interactive `git`. Keys held only in an agent or hardware token aren't supported.
+- A change applies to new instances immediately and to a running one on its next `claudio restart <id>`. An instance created before the image shipped an SSH client needs `claudio rebuild <id>` once.
 
 ### Lifecycle hooks: `post_create` vs `post_start`
 

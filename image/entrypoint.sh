@@ -240,6 +240,22 @@ if [ -n "${GH_TOKEN:-}" ]; then
 	gh auth setup-git >/dev/null 2>&1 || echo "entrypoint: gh auth setup-git failed; git push/fetch may be unauthenticated." >&2
 fi
 
+# Point ssh at the keys the operator listed under `ssh_keys:` in
+# ~/.claudio/config.yml, which arrive read-only in /opt/claudio/ssh-keys
+# (engine.CreateSpec.SSHKeys). The image's ssh config Includes this file
+# — see image/Dockerfile for why the keys need naming at all.
+#
+# Rewritten on every boot, unlike the write-when-absent files above: it
+# is derived entirely from what is mounted, home/ outlives the container,
+# and a key removed from the config must stop being offered rather than
+# linger as an IdentityFile line pointing at nothing.
+SSH_KEYS_CONFIG="$HOME/.claudio-ssh_config"
+rm -f "$SSH_KEYS_CONFIG"
+for key in /opt/claudio/ssh-keys/*; do
+	[ -f "$key" ] || continue
+	printf 'IdentityFile "%s"\n' "$key" >> "$SSH_KEYS_CONFIG"
+done
+
 # Seed git identity from the host (cmd/claudio/env.go's gitIdentityEnv,
 # ROD-108 stopgap). GH_TOKEN above authenticates `git push`, but a
 # commit still fails without a configured author — the image carries no
